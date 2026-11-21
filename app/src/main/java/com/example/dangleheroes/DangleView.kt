@@ -53,7 +53,7 @@ class DangleView(context: Context) : View(context) {
 
     init {
         for (i in 0..3) {
-            context.assets.open("heroes/hero_$i.png").use {
+            context.assets.open("heros/hero_$i.png").use {
                 sprites.add(BitmapFactory.decodeStream(it))
             }
         }

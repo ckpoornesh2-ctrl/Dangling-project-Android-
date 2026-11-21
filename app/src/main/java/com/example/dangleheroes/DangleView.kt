@@ -3,16 +3,25 @@ package com.example.dangleheroes
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
+import android.graphics.Matrix
+import android.graphics.Shader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.os.SystemClock
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.view.View
 import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.ceil
+import kotlin.math.atan2
+import kotlin.math.exp
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -25,7 +34,7 @@ import kotlin.math.sin
  * personality, idle motion and subtle visual accent. The cord is rendered
  * independently so it remains attached while the charm swings.
  */
-class DangleView(context: Context) : View(context) {
+class DangleView(context: Context) : View(context), SensorEventListener {
     companion object {
         private val CHARM_NAMES = listOf(
             "Evil Eye", "Chili & Lemon", "Daruma", "Lucky Cat", "Oni Mask"
@@ -84,13 +93,36 @@ class DangleView(context: Context) : View(context) {
     private val charms = ArrayList<Bitmap>(CHARM_NAMES.size)
     private val motions = ArrayList<MotionState>(CHARM_NAMES.size)
 
+    // Custom smooth cylindrical gold-silk texture; no braid, twist or spiral pattern.
+    private lateinit var cordTexture: Bitmap
+    private lateinit var cordShader: BitmapShader
+    private val cordMatrix = Matrix()
+    private val cordPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val cordShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val cordHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val cordLowlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private val tiltSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    private var sensorRegistered = false
+    private var sensorInitialized = false
+    private var filteredGravityX = 0f
+    private var filteredGravityY = 9.81f
+    private var targetPhoneTilt = 0f
+    private var smoothedPhoneTilt = 0f
+    private var phoneMotionEnabled = true
+
+    // The compact 92dp size is the default; menu controls select 72/92/112dp.
+    private val sizeWidthsDp = floatArrayOf(72f, 92f, 112f)
+    private var sizeIndex = 1
+
     private var selectedCharm = 0
     private var lastFrameTime = SystemClock.uptimeMillis()
     private var screenW = 0f
     private var screenH = 0f
     private var anchorY = dp(4f)
     private var paused = false
-    private var smallSize = false
 
     /** Center of the active charm, used by the service to align the touch area. */
     var onCharmPosition: ((Float, Float) -> Unit)? = null
@@ -107,7 +139,77 @@ class DangleView(context: Context) : View(context) {
             val rest = dp(68f)
             motions.add(MotionState(rest, rest, if (i % 2 == 0) 0.018f else -0.018f))
         }
+
+        cordTexture = context.assets.open("charms/gold_silk_cord.png").use {
+            BitmapFactory.decodeStream(it)
+        } ?: throw IllegalStateException("Missing gold cord texture: charms/gold_silk_cord.png")
+        cordShader = BitmapShader(cordTexture, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+        cordMatrix.setScale(dp(5.6f) / cordTexture.width, dp(72f) / cordTexture.height)
+        cordShader.setLocalMatrix(cordMatrix)
+
+        cordPaint.apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = dp(5.6f)
+            shader = cordShader
+            isFilterBitmap = true
+            isDither = true
+        }
+        cordShadowPaint.apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = dp(8.2f)
+            color = Color.argb(105, 47, 27, 8)
+        }
+        cordHighlightPaint.apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = dp(0.68f)
+            color = Color.argb(220, 255, 242, 202)
+        }
+        cordLowlightPaint.apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = dp(0.55f)
+            color = Color.argb(135, 115, 65, 13)
+        }
     }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        tiltSensor?.let { sensor ->
+            sensorRegistered = sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        if (sensorRegistered) sensorManager.unregisterListener(this)
+        sensorRegistered = false
+        super.onDetachedFromWindow()
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.values.size < 2) return
+        val alpha = if (event.sensor.type == Sensor.TYPE_GRAVITY) 0.10f else 0.035f
+        if (!sensorInitialized) {
+            filteredGravityX = event.values[0]
+            filteredGravityY = event.values[1]
+            sensorInitialized = true
+        } else {
+            filteredGravityX += (event.values[0] - filteredGravityX) * alpha
+            filteredGravityY += (event.values[1] - filteredGravityY) * alpha
+        }
+        targetPhoneTilt = if (phoneMotionEnabled) {
+            (atan2(-filteredGravityX, max(3.5f, abs(filteredGravityY))) * 0.72f)
+                .coerceIn(-0.24f, 0.24f)
+        } else 0f
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     fun beginPull(x: Float, y: Float) {
         // Do not wake a paused charm on touch-down: a stationary long press
@@ -211,20 +313,36 @@ class DangleView(context: Context) : View(context) {
 
     fun isPaused(): Boolean = paused
 
-    /** Toggles between the current compact 112dp width and a smaller 92dp width. */
-    fun toggleSize(): Boolean {
-        smallSize = !smallSize
+    /** The compact 92dp size is the default; the menu can move one step smaller or larger. */
+    fun decreaseSize(): String {
+        sizeIndex = (sizeIndex - 1).coerceAtLeast(0)
         invalidate()
-        return smallSize
+        return currentSizeLabel()
     }
 
-    fun isSmallSize(): Boolean = smallSize
+    fun increaseSize(): String {
+        sizeIndex = (sizeIndex + 1).coerceAtMost(sizeWidthsDp.lastIndex)
+        invalidate()
+        return currentSizeLabel()
+    }
+
+    fun currentSizeLabel(): String = "${sizeWidthsDp[sizeIndex].toInt()}dp"
+
+    fun togglePhoneMotion(): Boolean {
+        phoneMotionEnabled = !phoneMotionEnabled
+        if (!phoneMotionEnabled) targetPhoneTilt = 0f
+        invalidate()
+        return phoneMotionEnabled
+    }
+
+    fun isPhoneMotionEnabled(): Boolean = phoneMotionEnabled
 
     fun currentCharmName(): String = CHARM_NAMES[selectedCharm]
 
+    /** The close zone begins just below the screen midpoint, not at the very bottom. */
     fun isInBottomDropZone(rawY: Float): Boolean {
-        val screenBottom = if (screenH > 0f) screenH else resources.displayMetrics.heightPixels.toFloat()
-        return rawY >= screenBottom - dp(104f)
+        val screenHeight = if (screenH > 0f) screenH else resources.displayMetrics.heightPixels.toFloat()
+        return rawY >= screenHeight * 0.56f
     }
 
     private fun activeMotion() = motions[selectedCharm]
@@ -245,9 +363,9 @@ class DangleView(context: Context) : View(context) {
         if (!paused && !state.pulling) stepPhysics(state, elapsed, now, profile)
 
         val aspect = bitmap.width.toFloat() / bitmap.height.toFloat()
-        val sizeScale = if (smallSize) 0.82f else 1f
-        val maxCharmHeight = min(screenH * 0.36f, dp(300f) * sizeScale)
-        val maxCharmWidth = min(dp(112f) * sizeScale, screenW * 0.31f)
+        val sizeScale = sizeWidthsDp[sizeIndex] / 92f
+        val maxCharmHeight = min(screenH * 0.34f, dp(270f) * sizeScale)
+        val maxCharmWidth = min(dp(sizeWidthsDp[sizeIndex]), screenW * 0.31f)
         val charmWidth = min(maxCharmWidth, maxCharmHeight * aspect)
         val charmHeight = charmWidth / aspect
 
@@ -286,8 +404,14 @@ class DangleView(context: Context) : View(context) {
             state.ropeLength = state.ropeLength.coerceAtMost(state.ropeRest + dp(620f))
 
             val lengthDp = max(65f, state.ropeLength / density)
+            // Phone tilt is filtered twice: sensor noise first, then a slow physical follow response.
+            // This makes the charm drift with the handset instead of snapping to sensor readings.
+            val desiredTilt = if (phoneMotionEnabled) targetPhoneTilt else 0f
+            val follow = (1f - exp((-dt * 2.15f).toDouble()).toFloat()).coerceIn(0f, 1f)
+            smoothedPhoneTilt += (desiredTilt - smoothedPhoneTilt) * follow
             val breeze = sin(now / profile.swayPeriodMs).toFloat() * profile.idleForce
-            val angularAcceleration = -(profile.gravity / lengthDp) * sin(state.angle) -
+            val relativeAngle = state.angle - smoothedPhoneTilt
+            val angularAcceleration = -(profile.gravity / lengthDp) * sin(relativeAngle) -
                 (profile.angularDamping + abs(state.radialVelocity) / max(1f, state.ropeRest) * 0.055f) * state.angularVelocity + breeze
             state.angularVelocity += angularAcceleration * dt
             state.angle += state.angularVelocity * dt
@@ -326,26 +450,33 @@ class DangleView(context: Context) : View(context) {
             quadTo(midX, midY, px, py)
         }
 
-        paint.style = Paint.Style.STROKE
-        paint.strokeCap = Paint.Cap.ROUND
-        paint.strokeJoin = Paint.Join.ROUND
-        paint.strokeWidth = dp(4.2f)
-        paint.color = Color.argb(75, 36, 20, 8)
-        c.drawPath(cord, paint)
-        paint.strokeWidth = dp(2.1f)
-        paint.color = Color.rgb(145, 85, 26)
-        c.drawPath(cord, paint)
-        paint.strokeWidth = dp(0.85f)
-        paint.color = Color.rgb(255, 215, 135)
-        c.drawPath(cord, paint)
+        // A soft cast shadow, then the smooth satin-gold cylindrical texture.
+        c.drawPath(cord, cordShadowPaint)
+        c.drawPath(cord, cordPaint)
+
+        // Fine off-centre specular and bronze edge highlights create a rounded 3D cord.
+        val highlight = Path()
+        cord.offset(-dp(0.78f), 0f, highlight)
+        c.drawPath(highlight, cordHighlightPaint)
+        val lowlight = Path()
+        cord.offset(dp(0.88f), 0f, lowlight)
+        c.drawPath(lowlight, cordLowlightPaint)
 
         if (state.pulling && state.pullDistance > dp(3f)) {
-            paint.strokeWidth = dp(1.2f + tension * 1.5f)
+            paint.style = Paint.Style.STROKE
+            paint.strokeCap = Paint.Cap.ROUND
+            paint.strokeWidth = dp(1.15f + tension * 1.35f)
             val base = profile.glowColor
-            paint.color = Color.argb(90 + (125 * tension).toInt(), Color.red(base), Color.green(base), Color.blue(base))
+            paint.color = Color.argb(65 + (95 * tension).toInt(), Color.red(base), Color.green(base), Color.blue(base))
             c.drawPath(cord, paint)
         }
+
+        // Small polished end fitting where the new dynamic cord meets the charm's top bead.
         paint.style = Paint.Style.FILL
+        paint.color = Color.rgb(219, 157, 55)
+        c.drawCircle(px, py, dp(2.5f), paint)
+        paint.color = Color.argb(220, 255, 239, 183)
+        c.drawCircle(px - dp(0.65f), py - dp(0.8f), dp(0.82f), paint)
         paint.color = Color.rgb(255, 226, 174)
         c.drawCircle(ax, ay, dp(2.4f), paint)
     }
@@ -445,9 +576,9 @@ class DangleView(context: Context) : View(context) {
     private fun drawBottomDropHint(c: Canvas) {
         val panel = RectF(
             screenW * 0.5f - dp(112f),
-            screenH - dp(82f),
+            screenH * 0.70f,
             screenW * 0.5f + dp(112f),
-            screenH - dp(22f)
+            screenH * 0.70f + dp(58f)
         )
         paint.style = Paint.Style.FILL
         paint.color = Color.argb(220, 25, 28, 39)
@@ -456,7 +587,7 @@ class DangleView(context: Context) : View(context) {
         paint.textAlign = Paint.Align.CENTER
         paint.textSize = dp(14f)
         paint.isFakeBoldText = true
-        c.drawText("Release to close", screenW * 0.5f, screenH - dp(46f), paint)
+        c.drawText("Release to close", screenW * 0.5f, screenH * 0.70f + dp(36f), paint)
         paint.isFakeBoldText = false
         paint.textAlign = Paint.Align.LEFT
     }

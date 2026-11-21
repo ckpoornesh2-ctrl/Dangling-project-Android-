@@ -4,39 +4,52 @@
     "name": "evil_eye",
     "file": "charms/charm_0.png",
     "width": 317,
-    "height": 631,
-    "size_bytes": 187419
+    "height": 590,
+    "size_bytes": 183812,
+    "top_cord_trimmed": true
   },
   {
     "index": 1,
     "name": "chili_lemon",
     "file": "charms/charm_1.png",
     "width": 282,
-    "height": 751,
-    "size_bytes": 249376
+    "height": 713,
+    "size_bytes": 246784,
+    "top_cord_trimmed": true
   },
   {
     "index": 2,
     "name": "daruma",
     "file": "charms/charm_2.png",
     "width": 302,
-    "height": 655,
-    "size_bytes": 237931
+    "height": 597,
+    "size_bytes": 233636,
+    "top_cord_trimmed": true
   },
   {
     "index": 3,
     "name": "maneki_neko",
     "file": "charms/charm_3.png",
     "width": 299,
-    "height": 645,
-    "size_bytes": 245746
+    "height": 592,
+    "size_bytes": 242089,
+    "top_cord_trimmed": true
   },
   {
     "index": 4,
     "name": "oni_mask",
     "file": "charms/charm_4.png",
     "width": 299,
-    "height": 629,
-    "size_bytes": 288175
+    "height": 586,
+    "size_bytes": 285194,
+    "top_cord_trimmed": true
+  },
+  {
+    "name": "gold_silk_cord",
+    "file": "charms/gold_silk_cord.png",
+    "width": 48,
+    "height": 128,
+    "size_bytes": 307,
+    "style": "smooth cylindrical satin-gold texture; non-twisted"
   }
 ]

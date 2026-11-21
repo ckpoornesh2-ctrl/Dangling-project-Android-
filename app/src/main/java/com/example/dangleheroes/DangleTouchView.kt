@@ -1,8 +1,10 @@
 package com.example.dangleheroes
 
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -19,6 +21,7 @@ class DangleTouchView(
     private var moved = false
     private var longPressTriggered = false
     private var isDown = false
+    private var dropZoneActive = false
 
     /** The service freezes the hit-window position during a drag or long press. */
     var isGestureActive: Boolean = false
@@ -43,6 +46,7 @@ class DangleTouchView(
                 downY = event.rawY
                 moved = false
                 longPressTriggered = false
+                dropZoneActive = false
                 isDown = true
                 isGestureActive = true
                 renderer.beginPull(event.rawX, event.rawY)
@@ -54,19 +58,33 @@ class DangleTouchView(
                     moved = true
                     handler.removeCallbacks(longPressRunnable)
                 }
-                if (!longPressTriggered) renderer.movePull(event.rawX, event.rawY)
+                if (!longPressTriggered) {
+                    renderer.movePull(event.rawX, event.rawY)
+                    val inDropZone = renderer.isInBottomDropZone(event.rawY)
+                    if (inDropZone && !dropZoneActive) {
+                        performCloseZoneHaptic()
+                    }
+                    dropZoneActive = inDropZone
+                }
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 handler.removeCallbacks(longPressRunnable)
                 val wasLongPress = longPressTriggered
                 val closeRequested = moved && !wasLongPress && renderer.isInBottomDropZone(event.rawY)
-                if (!wasLongPress) renderer.releasePull()
+                if (closeRequested) {
+                    // Fallback in case the platform delivers ACTION_UP without a final ACTION_MOVE.
+                    if (!dropZoneActive) performCloseZoneHaptic()
+                    // Do not add sling energy when the user is intentionally dismissing the widget.
+                    renderer.cancelPull()
+                    onDismissRequested?.invoke()
+                } else if (!wasLongPress) {
+                    renderer.releasePull()
+                }
                 isDown = false
                 isGestureActive = false
-                if (closeRequested) {
-                    onDismissRequested?.invoke()
-                } else if (!moved && !wasLongPress) {
+                dropZoneActive = false
+                if (!closeRequested && !moved && !wasLongPress) {
                     renderer.nextCharm()
                 }
                 performClick()
@@ -74,13 +92,24 @@ class DangleTouchView(
             }
             MotionEvent.ACTION_CANCEL -> {
                 handler.removeCallbacks(longPressRunnable)
-                if (!longPressTriggered) renderer.releasePull()
+                if (!longPressTriggered) renderer.cancelPull()
                 isDown = false
                 isGestureActive = false
+                dropZoneActive = false
                 return true
             }
         }
         return true
+    }
+
+    private fun performCloseZoneHaptic() {
+        val feedback = if (Build.VERSION.SDK_INT >= 30) {
+            HapticFeedbackConstants.CONFIRM
+        } else {
+            HapticFeedbackConstants.CONTEXT_CLICK
+        }
+        // View haptics use the system's subtle confirmation pattern; no VIBRATE permission needed.
+        performHapticFeedback(feedback)
     }
 
     override fun performClick(): Boolean {
@@ -92,6 +121,7 @@ class DangleTouchView(
         handler.removeCallbacks(longPressRunnable)
         isDown = false
         isGestureActive = false
+        dropZoneActive = false
         super.onDetachedFromWindow()
     }
 

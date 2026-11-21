@@ -54,8 +54,9 @@ class DangleOverlayService : Service() {
 
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        val hitWidth = minOf(dp(176), screenWidth - dp(16)).coerceAtLeast(dp(132))
-        val hitHeight = minOf(dp(360), screenHeight - dp(16)).coerceAtLeast(dp(200))
+        // A compact touch target around the charm, not a screen-sized invisible blocker.
+        val hitWidth = minOf(dp(148), screenWidth - dp(16)).coerceAtLeast(dp(112))
+        val hitHeight = minOf(dp(292), screenHeight - dp(16)).coerceAtLeast(dp(190))
         val hit = DangleTouchView(this, draw)
         touchView = hit
         hit.onDismissRequested = { stopSelf() }
@@ -107,22 +108,30 @@ class DangleOverlayService : Service() {
         val draw = renderer ?: return
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        val menuWidth = minOf(dp(296), screenWidth - dp(20)).coerceAtLeast(dp(250))
-        val menuHeight = dp(88)
+        val menuWidth = minOf(dp(332), screenWidth - dp(16)).coerceAtLeast(dp(250))
+        val menuHeight = dp(118)
         val menu = CharmMenuView(this)
         menuView = menu
-        menu.updateState(draw.isPaused(), draw.isSmallSize())
+        menu.updateState(draw.isPaused(), draw.currentSizeLabel(), draw.isPhoneMotionEnabled(), draw.currentCharmName())
         menu.onNextRequested = {
             draw.nextCharm()
             dismissCharmMenu()
         }
         menu.onPauseRequested = {
             val nowPaused = draw.togglePaused()
-            menu.updateState(nowPaused, draw.isSmallSize())
+            menu.updateState(nowPaused, draw.currentSizeLabel(), draw.isPhoneMotionEnabled(), draw.currentCharmName())
         }
-        menu.onSizeRequested = {
-            val nowSmall = draw.toggleSize()
-            menu.updateState(draw.isPaused(), nowSmall)
+        menu.onSmallerRequested = {
+            draw.decreaseSize()
+            menu.updateState(draw.isPaused(), draw.currentSizeLabel(), draw.isPhoneMotionEnabled(), draw.currentCharmName())
+        }
+        menu.onBiggerRequested = {
+            draw.increaseSize()
+            menu.updateState(draw.isPaused(), draw.currentSizeLabel(), draw.isPhoneMotionEnabled(), draw.currentCharmName())
+        }
+        menu.onMotionRequested = {
+            draw.togglePhoneMotion()
+            menu.updateState(draw.isPaused(), draw.currentSizeLabel(), draw.isPhoneMotionEnabled(), draw.currentCharmName())
         }
         menu.onCloseRequested = { stopSelf() }
         menu.onDismissRequested = { dismissCharmMenu() }
@@ -187,7 +196,7 @@ class DangleOverlayService : Service() {
         }
         return builder
             .setContentTitle("Lucky Dangle is running")
-            .setContentText("Tap to switch · Hold for menu · Drag to swing or close")
+            .setContentText("Tap to switch · Hold for menu · Tilt to sway · Drag to swing or close")
             .setSmallIcon(android.R.drawable.star_on)
             .addAction(Notification.Action.Builder(null, "Close", stopIntent).build())
             .setOngoing(true)

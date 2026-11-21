@@ -5,7 +5,7 @@
     "frames": 7,
     "frame_width": 128,
     "frame_height": 160,
-    "file": "heroes/hero_0.png",
+    "file": "heros/hero_0.png",
     "bytes": 155465
   },
   {
@@ -14,7 +14,7 @@
     "frames": 7,
     "frame_width": 128,
     "frame_height": 160,
-    "file": "heroes/hero_1.png",
+    "file": "heros/hero_1.png",
     "bytes": 163014
   },
   {
@@ -23,7 +23,7 @@
     "frames": 7,
     "frame_width": 128,
     "frame_height": 160,
-    "file": "heroes/hero_2.png",
+    "file": "heros/hero_2.png",
     "bytes": 153177
   },
   {
@@ -32,7 +32,7 @@
     "frames": 7,
     "frame_width": 128,
     "frame_height": 160,
-    "file": "heroes/hero_3.png",
+    "file": "heros/hero_3.png",
     "bytes": 159539
   },
   {
@@ -41,7 +41,7 @@
     "frames": 7,
     "frame_width": 128,
     "frame_height": 160,
-    "file": "heroes/hero_4.png",
+    "file": "heros/hero_4.png",
     "bytes": 154768
   }
 ]

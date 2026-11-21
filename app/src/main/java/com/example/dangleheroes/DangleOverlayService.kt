@@ -51,8 +51,10 @@ class DangleOverlayService : Service() {
 
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        val hitWidth = minOf(dp(270), screenWidth - dp(12)).coerceAtLeast(dp(150))
-        val hitHeight = minOf(dp(470), screenHeight - dp(12)).coerceAtLeast(dp(220))
+        // Keep the interactive window close to the compact charm instead of
+        // creating a large invisible touch surface over other apps.
+        val hitWidth = minOf(dp(176), screenWidth - dp(16)).coerceAtLeast(dp(132))
+        val hitHeight = minOf(dp(360), screenHeight - dp(16)).coerceAtLeast(dp(200))
         val hit = DangleTouchView(this, draw)
         touchView = hit
         hit.onDismissRequested = { stopSelf() }

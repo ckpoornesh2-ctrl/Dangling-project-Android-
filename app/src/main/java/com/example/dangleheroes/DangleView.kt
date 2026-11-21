@@ -177,8 +177,10 @@ class DangleView(context: Context) : View(context) {
         if (!state.pulling) stepPhysics(state, elapsed, now)
 
         val aspect = bitmap.width.toFloat() / bitmap.height.toFloat()
-        val maxCharmHeight = min(screenH * 0.54f, dp(470f))
-        val maxCharmWidth = min(dp(190f), screenW * 0.62f)
+        // Compact floating size: roughly 60% of the previous width, so the charm
+        // reads as a small screen accessory instead of a large overlay.
+        val maxCharmHeight = min(screenH * 0.36f, dp(300f))
+        val maxCharmWidth = min(dp(112f), screenW * 0.31f)
         val charmWidth = min(maxCharmWidth, maxCharmHeight * aspect)
         val charmHeight = charmWidth / aspect
 
@@ -225,7 +227,7 @@ class DangleView(context: Context) : View(context) {
             state.angularVelocity += angularAcceleration * dt
             state.angle += state.angularVelocity * dt
 
-            val screenSafeHalf = max(dp(8f), screenW * 0.5f - dp(100f))
+            val screenSafeHalf = max(dp(8f), screenW * 0.5f - dp(70f))
             val limit = asin((screenSafeHalf / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
             if (state.angle > limit) {
                 state.angle = limit

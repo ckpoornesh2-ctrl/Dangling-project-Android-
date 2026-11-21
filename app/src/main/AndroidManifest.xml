@@ -6,7 +6,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="Dangle Heroes"
+        android:label="Lucky Dangle"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="false">
         <activity
@@ -24,7 +24,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-started floating decorative superhero overlay; stopped by the user from the app or notification." />
+                android:value="User-started single decorative hanging lucky charm overlay; closed by dragging to the bottom or from the notification." />
         </service>
     </application>
 </manifest>

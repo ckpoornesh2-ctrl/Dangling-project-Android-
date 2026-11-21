@@ -17,7 +17,7 @@ import kotlin.math.abs
 class DangleOverlayService : Service() {
     private lateinit var wm: WindowManager
     private var renderer: DangleView? = null
-    private var touch: DangleTouchView? = null
+    private var touchView: DangleTouchView? = null
     private var touchParams: WindowManager.LayoutParams? = null
     private var lastX = Int.MIN_VALUE
     private var lastY = Int.MIN_VALUE
@@ -30,7 +30,7 @@ class DangleOverlayService : Service() {
         try {
             installOverlay()
         } catch (e: Exception) {
-            Log.e(TAG, "Could not create Dangle Heroes overlay", e)
+            Log.e(TAG, "Could not create Lucky Dangle overlay", e)
             stopSelf()
         }
     }
@@ -49,36 +49,49 @@ class DangleOverlayService : Service() {
         ).apply { gravity = Gravity.TOP or Gravity.START }
         wm.addView(draw, full)
 
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val hitWidth = minOf(dp(270), screenWidth - dp(12)).coerceAtLeast(dp(150))
+        val hitHeight = minOf(dp(470), screenHeight - dp(12)).coerceAtLeast(dp(220))
         val hit = DangleTouchView(this, draw)
-        touch = hit
+        touchView = hit
+        hit.onDismissRequested = { stopSelf() }
+
         val hp = WindowManager.LayoutParams(
-            dp(120), dp(136),
+            hitWidth,
+            hitHeight,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = dp(150)
+            x = (screenWidth - hitWidth) / 2
+            y = 0
         }
         touchParams = hp
         wm.addView(hit, hp)
 
-        draw.onHeroPosition = { x, y ->
-            val p = touchParams
-            if (p != null) {
-                val nx = (x - dp(60)).toInt()
-                val ny = (y - dp(68)).toInt()
-                if (abs(nx - lastX) > dp(3) || abs(ny - lastY) > dp(3)) {
-                    lastX = nx
-                    lastY = ny
-                    p.x = nx
-                    p.y = ny
-                    try {
-                        wm.updateViewLayout(hit, p)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Touch target layout update skipped", e)
+        draw.onCharmPosition = { x, y ->
+            // Keep the touch surface over the moving charm while idle. Freeze it
+            // for the duration of a drag so Android keeps the same touch target.
+            if (!hit.isGestureActive) {
+                val p = touchParams
+                if (p != null) {
+                    val nx = (x - hitWidth * 0.5f).toInt()
+                        .coerceIn(0, (screenWidth - hitWidth).coerceAtLeast(0))
+                    val ny = (y - hitHeight * 0.5f).toInt()
+                        .coerceIn(0, (screenHeight - hitHeight).coerceAtLeast(0))
+                    if (abs(nx - lastX) > dp(3) || abs(ny - lastY) > dp(3)) {
+                        lastX = nx
+                        lastY = ny
+                        p.x = nx
+                        p.y = ny
+                        try {
+                            wm.updateViewLayout(hit, p)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Charm touch target update skipped", e)
+                        }
                     }
                 }
             }
@@ -90,7 +103,7 @@ class DangleOverlayService : Service() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             val channel = NotificationChannel(
-                CHANNEL_ID, "Dangle Heroes", NotificationManager.IMPORTANCE_LOW
+                CHANNEL_ID, "Lucky Dangle", NotificationManager.IMPORTANCE_LOW
             )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
@@ -109,10 +122,10 @@ class DangleOverlayService : Service() {
             Notification.Builder(this)
         }
         return builder
-            .setContentTitle("Dangle Heroes is running")
-            .setContentText("Japanese Chibi Edition · Pull down and release to sling")
+            .setContentTitle("Lucky Dangle is running")
+            .setContentText("Tap to switch charms · Drag to swing · Drop near bottom to close")
             .setSmallIcon(android.R.drawable.star_on)
-            .addAction(Notification.Action.Builder(null, "Stop", stopIntent).build())
+            .addAction(Notification.Action.Builder(null, "Close", stopIntent).build())
             .setOngoing(true)
             .build()
     }
@@ -124,12 +137,12 @@ class DangleOverlayService : Service() {
 
     override fun onDestroy() {
         if (::wm.isInitialized) {
-            touch?.let { try { wm.removeView(it) } catch (_: Exception) { } }
+            touchView?.let { try { wm.removeView(it) } catch (_: Exception) { } }
             renderer?.let { try { wm.removeView(it) } catch (_: Exception) { } }
         }
-        touch = null
-        renderer = null
+        touchView = null
         touchParams = null
+        renderer = null
         if (Build.VERSION.SDK_INT >= 24) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -142,8 +155,8 @@ class DangleOverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private const val TAG = "DangleHeroes"
-        private const val CHANNEL_ID = "dangle_heroes"
+        private const val TAG = "LuckyDangle"
+        private const val CHANNEL_ID = "lucky_dangle"
         private const val NOTIFICATION_ID = 77
         const val ACTION_STOP = "com.example.dangleheroes.STOP"
     }

@@ -20,30 +20,30 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(pad, pad, pad, pad)
-            setBackgroundColor(Color.rgb(16, 20, 34))
+            setBackgroundColor(Color.rgb(16, 19, 29))
         }
         val title = TextView(this).apply {
-            text = "DANGLE HEROES"
-            textSize = 28f
+            text = "LUCKY DANGLE"
+            textSize = 30f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }
         val subtitle = TextView(this).apply {
-            text = "Japanese Chibi Edition"
-            textSize = 18f
-            setTextColor(Color.rgb(245, 190, 145))
+            text = "A lucky charm for your screen."
+            textSize = 17f
+            setTextColor(Color.rgb(224, 184, 111))
             gravity = Gravity.CENTER
             setPadding(0, pad / 3, 0, pad)
         }
         val info = TextView(this).apply {
-            text = "Five original characters with seven animated poses each.\n\nSora · Hana · Kaito · Miyu · Ren\n\nPull down and release to sling. Drag sideways to steer. Tap the character to switch."
+            text = "One realistic 3D charm at a time.\n\nEvil Eye · Chili & Lemon · Daruma · Lucky Cat · Oni Mask\n\nTap the charm to switch to the next one. Drag it down and release to sling it. Drag it to the bottom of the screen and release to close the overlay."
             textSize = 16f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
             setPadding(0, pad / 2, 0, pad * 2)
         }
         val start = Button(this).apply {
-            text = "START OVERLAY"
+            text = "START LUCKY DANGLE"
             setOnClickListener { startOverlay() }
         }
         val stop = Button(this).apply {

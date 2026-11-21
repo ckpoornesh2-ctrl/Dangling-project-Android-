@@ -5,10 +5,19 @@ import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
 
-class DangleTouchView(context: Context, private val renderer: DangleView) : View(context) {
+class DangleTouchView(
+    context: Context,
+    private val renderer: DangleView
+) : View(context) {
     private var downX = 0f
     private var downY = 0f
     private var moved = false
+
+    /** The service freezes the hit-window position during an active drag. */
+    var isGestureActive: Boolean = false
+        private set
+
+    var onDismissRequested: (() -> Unit)? = null
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -16,18 +25,30 @@ class DangleTouchView(context: Context, private val renderer: DangleView) : View
                 downX = event.rawX
                 downY = event.rawY
                 moved = false
+                isGestureActive = true
                 renderer.beginPull(event.rawX, event.rawY)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (abs(event.rawX - downX) > 6f || abs(event.rawY - downY) > 6f) moved = true
+                if (abs(event.rawX - downX) > 8f || abs(event.rawY - downY) > 8f) moved = true
                 renderer.movePull(event.rawX, event.rawY)
                 return true
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            MotionEvent.ACTION_UP -> {
+                val closeRequested = moved && renderer.isInBottomDropZone(event.rawY)
                 renderer.releasePull()
-                if (!moved) renderer.nextHero()
+                isGestureActive = false
+                if (closeRequested) {
+                    onDismissRequested?.invoke()
+                } else if (!moved) {
+                    renderer.nextCharm()
+                }
                 performClick()
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                renderer.releasePull()
+                isGestureActive = false
                 return true
             }
         }

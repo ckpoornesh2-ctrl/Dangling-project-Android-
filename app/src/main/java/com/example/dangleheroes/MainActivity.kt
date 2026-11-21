@@ -36,7 +36,7 @@ class MainActivity : Activity() {
             setPadding(0, pad / 3, 0, pad)
         }
         val info = TextView(this).apply {
-            text = "One realistic 3D charm at a time.\n\nEvil Eye · Chili & Lemon · Daruma · Lucky Cat · Oni Mask\n\nTap the charm to switch to the next one. Drag it down and release to sling it. Drag it to the bottom of the screen and release to close the overlay."
+            text = "One realistic 3D charm at a time.\n\nEvil Eye · Chili & Lemon · Daruma · Lucky Cat · Oni Mask\n\nTap the charm to switch. Hold for 480ms to open its menu. Pull down or sideways and release to swing. Drag to the bottom and release to close."
             textSize = 16f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER

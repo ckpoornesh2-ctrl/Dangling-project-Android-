@@ -19,8 +19,11 @@ class DangleOverlayService : Service() {
     private var renderer: DangleView? = null
     private var touchView: DangleTouchView? = null
     private var touchParams: WindowManager.LayoutParams? = null
+    private var menuView: CharmMenuView? = null
     private var lastX = Int.MIN_VALUE
     private var lastY = Int.MIN_VALUE
+    private var charmX = 0f
+    private var charmY = 0f
 
     override fun onCreate() {
         super.onCreate()
@@ -51,13 +54,12 @@ class DangleOverlayService : Service() {
 
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        // Keep the interactive window close to the compact charm instead of
-        // creating a large invisible touch surface over other apps.
         val hitWidth = minOf(dp(176), screenWidth - dp(16)).coerceAtLeast(dp(132))
         val hitHeight = minOf(dp(360), screenHeight - dp(16)).coerceAtLeast(dp(200))
         val hit = DangleTouchView(this, draw)
         touchView = hit
         hit.onDismissRequested = { stopSelf() }
+        hit.onMenuRequested = { showCharmMenu() }
 
         val hp = WindowManager.LayoutParams(
             hitWidth,
@@ -75,9 +77,9 @@ class DangleOverlayService : Service() {
         wm.addView(hit, hp)
 
         draw.onCharmPosition = { x, y ->
-            // Keep the touch surface over the moving charm while idle. Freeze it
-            // for the duration of a drag so Android keeps the same touch target.
-            if (!hit.isGestureActive) {
+            charmX = x
+            charmY = y
+            if (!hit.isGestureActive && menuView == null) {
                 val p = touchParams
                 if (p != null) {
                     val nx = (x - hitWidth * 0.5f).toInt()
@@ -98,6 +100,66 @@ class DangleOverlayService : Service() {
                 }
             }
         }
+    }
+
+    private fun showCharmMenu() {
+        if (menuView != null) return
+        val draw = renderer ?: return
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val menuWidth = minOf(dp(296), screenWidth - dp(20)).coerceAtLeast(dp(250))
+        val menuHeight = dp(88)
+        val menu = CharmMenuView(this)
+        menuView = menu
+        menu.updateState(draw.isPaused(), draw.isSmallSize())
+        menu.onNextRequested = {
+            draw.nextCharm()
+            dismissCharmMenu()
+        }
+        menu.onPauseRequested = {
+            val nowPaused = draw.togglePaused()
+            menu.updateState(nowPaused, draw.isSmallSize())
+        }
+        menu.onSizeRequested = {
+            val nowSmall = draw.toggleSize()
+            menu.updateState(draw.isPaused(), nowSmall)
+        }
+        menu.onCloseRequested = { stopSelf() }
+        menu.onDismissRequested = { dismissCharmMenu() }
+
+        val x = ((screenWidth - menuWidth) / 2).coerceAtLeast(0)
+        val preferredY = charmY.toInt() + dp(18)
+        val maxY = (screenHeight - menuHeight - dp(16)).coerceAtLeast(dp(8))
+        val y = preferredY.coerceIn(dp(8), maxY)
+        val params = WindowManager.LayoutParams(
+            menuWidth,
+            menuHeight,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            this.x = x
+            this.y = y
+        }
+        try {
+            wm.addView(menu, params)
+        } catch (e: Exception) {
+            menuView = null
+            Log.e(TAG, "Could not show charm menu", e)
+        }
+    }
+
+    private fun dismissCharmMenu() {
+        menuView?.let { menu ->
+            try { wm.removeView(menu) } catch (e: Exception) {
+                Log.w(TAG, "Charm menu removal skipped", e)
+            }
+        }
+        menuView = null
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -125,7 +187,7 @@ class DangleOverlayService : Service() {
         }
         return builder
             .setContentTitle("Lucky Dangle is running")
-            .setContentText("Tap to switch charms · Drag to swing · Drop near bottom to close")
+            .setContentText("Tap to switch · Hold for menu · Drag to swing or close")
             .setSmallIcon(android.R.drawable.star_on)
             .addAction(Notification.Action.Builder(null, "Close", stopIntent).build())
             .setOngoing(true)
@@ -138,6 +200,7 @@ class DangleOverlayService : Service() {
     }
 
     override fun onDestroy() {
+        dismissCharmMenu()
         if (::wm.isInitialized) {
             touchView?.let { try { wm.removeView(it) } catch (_: Exception) { } }
             renderer?.let { try { wm.removeView(it) } catch (_: Exception) { } }

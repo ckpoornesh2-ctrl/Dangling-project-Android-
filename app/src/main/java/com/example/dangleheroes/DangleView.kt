@@ -21,9 +21,9 @@ import kotlin.math.sin
 
 /**
  * Lucky Dangle renderer.
- * Shows exactly one glossy 3D charm at a time. Tapping the charm advances
- * through the five charms; dragging stretches the live cord and releasing
- * launches a damped swing. Releasing inside the bottom drop zone closes it.
+ * One glossy 3D charm is shown at a time. Each charm has its own physical
+ * personality, idle motion and subtle visual accent. The cord is rendered
+ * independently so it remains attached while the charm swings.
  */
 class DangleView(context: Context) : View(context) {
     companion object {
@@ -31,6 +31,32 @@ class DangleView(context: Context) : View(context) {
             "Evil Eye", "Chili & Lemon", "Daruma", "Lucky Cat", "Oni Mask"
         )
     }
+
+    private data class CharmPersonality(
+        val springStiffness: Float,
+        val springDamping: Float,
+        val gravity: Float,
+        val angularDamping: Float,
+        val launchMultiplier: Float,
+        val idleForce: Float,
+        val bodyRotation: Float,
+        val idleTiltDegrees: Float,
+        val swayPeriodMs: Double,
+        val glowColor: Int
+    )
+
+    private val personalities = listOf(
+        // Evil Eye: balanced, steady movement with a cool blue shimmer.
+        CharmPersonality(58f, 9.8f, 1040f, 0.78f, 0.96f, 0.020f, 0.22f, 0.45f, 1700.0, Color.rgb(65, 165, 255)),
+        // Chili & Lemon: a longer, heavier cluster with a little more side sway.
+        CharmPersonality(43f, 8.7f, 1190f, 0.58f, 0.94f, 0.038f, 0.40f, 1.15f, 1280.0, Color.rgb(117, 190, 69)),
+        // Daruma: rounded and springy, with a gentle settling wobble.
+        CharmPersonality(63f, 10.1f, 1320f, 0.88f, 0.92f, 0.016f, 0.62f, 1.65f, 1920.0, Color.rgb(255, 185, 75)),
+        // Lucky Cat: lighter, lively motion and a warm bell-like glint.
+        CharmPersonality(70f, 8.2f, 930f, 0.62f, 1.10f, 0.044f, 0.30f, 0.95f, 1080.0, Color.rgb(255, 205, 105)),
+        // Oni Mask: heavier, slower swing with stronger damping.
+        CharmPersonality(38f, 10.9f, 1480f, 1.03f, 0.82f, 0.010f, 0.16f, 0.35f, 2150.0, Color.rgb(255, 94, 66))
+    )
 
     private data class MotionState(
         var ropeRest: Float,
@@ -63,8 +89,10 @@ class DangleView(context: Context) : View(context) {
     private var screenW = 0f
     private var screenH = 0f
     private var anchorY = dp(4f)
+    private var paused = false
+    private var smallSize = false
 
-    /** Center of the active charm; used to keep one movable touch window aligned. */
+    /** Center of the active charm, used by the service to align the touch area. */
     var onCharmPosition: ((Float, Float) -> Unit)? = null
 
     init {
@@ -82,6 +110,8 @@ class DangleView(context: Context) : View(context) {
     }
 
     fun beginPull(x: Float, y: Float) {
+        // Do not wake a paused charm on touch-down: a stationary long press
+        // should open the menu while preserving the user's paused state.
         val state = activeMotion()
         state.pulling = true
         state.pullStartX = x
@@ -100,6 +130,7 @@ class DangleView(context: Context) : View(context) {
     fun movePull(x: Float, y: Float) {
         val state = activeMotion()
         if (!state.pulling) return
+        if (paused) paused = false
 
         val maxPull = min(screenH * 0.72f, dp(620f)).coerceAtLeast(dp(220f))
         val dx = x - state.pullStartX
@@ -123,12 +154,14 @@ class DangleView(context: Context) : View(context) {
         if (!state.pulling) return
         state.pulling = false
 
+        val profile = personalities[selectedCharm]
         val extension = (state.ropeLength - state.ropeRest).coerceAtLeast(0f)
         val maxPull = min(screenH * 0.72f, dp(620f)).coerceAtLeast(dp(220f))
         val extensionRatio = (extension / maxPull).coerceIn(0f, 1f)
 
         if (extension > dp(5f)) {
-            var launchSpeed = extension * 2.05f
+            // Stored elastic energy plus a small amount of upward-flick velocity.
+            var launchSpeed = extension * 2.05f * profile.launchMultiplier
             if (state.pointerVY < -110f) launchSpeed += abs(state.pointerVY) * 0.18f
             state.radialVelocity = -launchSpeed.coerceAtMost(dp(1050f))
         }
@@ -139,21 +172,55 @@ class DangleView(context: Context) : View(context) {
                 abs(state.angle) > 0.04f -> sign(state.angle)
                 else -> 1f
             }
-            val tangentialKick = (state.pointerVX / max(1f, state.ropeRest)) * 0.62f
-            state.angularVelocity += tangentialKick.coerceIn(-4.2f, 4.2f)
-            state.angularVelocity += direction * (0.42f + extensionRatio * 1.65f)
-            state.angularVelocity = state.angularVelocity.coerceIn(-5.4f, 5.4f)
+            val tangentialKick = (state.pointerVX / max(1f, state.ropeRest)) * 0.66f
+            state.angularVelocity += tangentialKick.coerceIn(-4.3f, 4.3f)
+            state.angularVelocity += direction * (0.42f + extensionRatio * 1.65f) * profile.launchMultiplier
+            state.angularVelocity = state.angularVelocity.coerceIn(-5.5f, 5.5f)
         }
         state.pullDistance = 0f
-        invalidate()
-    }
-
-    /** Tap advances to the next charm; each charm keeps its own swing state. */
-    fun nextCharm() {
-        selectedCharm = (selectedCharm + 1) % charms.size
         lastFrameTime = SystemClock.uptimeMillis()
         invalidate()
     }
+
+    /** Cancels the press used to open the hold menu without adding sling energy. */
+    fun cancelPull() {
+        val state = activeMotion()
+        if (!state.pulling) return
+        state.pulling = false
+        state.ropeLength = state.ropeRest
+        state.pullDistance = 0f
+        state.radialVelocity = 0f
+        state.angularVelocity *= 0.45f
+        invalidate()
+    }
+
+    /** Short tap advances to the next charm. Every charm keeps its own motion. */
+    fun nextCharm() {
+        selectedCharm = (selectedCharm + 1) % charms.size
+        paused = false
+        lastFrameTime = SystemClock.uptimeMillis()
+        invalidate()
+    }
+
+    fun togglePaused(): Boolean {
+        paused = !paused
+        lastFrameTime = SystemClock.uptimeMillis()
+        invalidate()
+        return paused
+    }
+
+    fun isPaused(): Boolean = paused
+
+    /** Toggles between the current compact 112dp width and a smaller 92dp width. */
+    fun toggleSize(): Boolean {
+        smallSize = !smallSize
+        invalidate()
+        return smallSize
+    }
+
+    fun isSmallSize(): Boolean = smallSize
+
+    fun currentCharmName(): String = CHARM_NAMES[selectedCharm]
 
     fun isInBottomDropZone(rawY: Float): Boolean {
         val screenBottom = if (screenH > 0f) screenH else resources.displayMetrics.heightPixels.toFloat()
@@ -169,18 +236,18 @@ class DangleView(context: Context) : View(context) {
         if (screenW <= 0f || screenH <= 0f) return
 
         val now = SystemClock.uptimeMillis()
-        val elapsed = ((now - lastFrameTime).coerceIn(1L, 32L)) / 1000f
+        val elapsed = if (paused) 0f else ((now - lastFrameTime).coerceIn(1L, 32L)) / 1000f
         lastFrameTime = now
 
         val state = activeMotion()
+        val profile = personalities[selectedCharm]
         val bitmap = charms[selectedCharm]
-        if (!state.pulling) stepPhysics(state, elapsed, now)
+        if (!paused && !state.pulling) stepPhysics(state, elapsed, now, profile)
 
         val aspect = bitmap.width.toFloat() / bitmap.height.toFloat()
-        // Compact floating size: roughly 60% of the previous width, so the charm
-        // reads as a small screen accessory instead of a large overlay.
-        val maxCharmHeight = min(screenH * 0.36f, dp(300f))
-        val maxCharmWidth = min(dp(112f), screenW * 0.31f)
+        val sizeScale = if (smallSize) 0.82f else 1f
+        val maxCharmHeight = min(screenH * 0.36f, dp(300f) * sizeScale)
+        val maxCharmWidth = min(dp(112f) * sizeScale, screenW * 0.31f)
         val charmWidth = min(maxCharmWidth, maxCharmHeight * aspect)
         val charmHeight = charmWidth / aspect
 
@@ -191,39 +258,37 @@ class DangleView(context: Context) : View(context) {
         val pivotX = anchorX + sin(visibleAngle) * state.ropeLength
         val pivotY = anchorY + cos(visibleAngle) * state.ropeLength
 
-        drawCord(canvas, anchorX, anchorY, pivotX, pivotY, state, now)
-        drawCharm(canvas, bitmap, pivotX, pivotY, charmWidth, charmHeight, visibleAngle)
-        drawSpecularGlint(canvas, pivotX, pivotY, charmWidth, charmHeight, now)
-        if (state.pulling && isInBottomDropZone(state.pointerY)) {
-            drawBottomDropHint(canvas)
-        }
+        drawCord(canvas, anchorX, anchorY, pivotX, pivotY, state, profile, now)
+        drawCharm(canvas, bitmap, pivotX, pivotY, charmWidth, charmHeight, visibleAngle, profile, now)
+        drawPersonalityEffect(canvas, pivotX, pivotY, charmWidth, charmHeight, state, now)
 
+        if (state.pulling && isInBottomDropZone(state.pointerY)) drawBottomDropHint(canvas)
         onCharmPosition?.invoke(pivotX, pivotY + charmHeight * 0.53f)
-        postInvalidateOnAnimation()
+
+        // When paused, render a still frame and stop the animation callback loop.
+        if (!paused) postInvalidateOnAnimation()
     }
 
-    /** Damped spring + pendulum with short substeps for stable, responsive motion. */
-    private fun stepPhysics(state: MotionState, elapsed: Float, now: Long) {
+    /** Stable damped spring + pendulum integration using short substeps. */
+    private fun stepPhysics(state: MotionState, elapsed: Float, now: Long, profile: CharmPersonality) {
         val steps = max(1, ceil(elapsed / 0.008f).toInt())
         val dt = elapsed / steps
         repeat(steps) {
             val extension = state.ropeLength - state.ropeRest
-            val springStiffness = 48f
-            val springDamping = 8.7f
-            val radialAcceleration = -springStiffness * extension - springDamping * state.radialVelocity
+            val radialAcceleration = -profile.springStiffness * extension - profile.springDamping * state.radialVelocity
             state.radialVelocity += radialAcceleration * dt
             state.ropeLength += state.radialVelocity * dt
 
             if (state.ropeLength < state.ropeRest) {
                 state.ropeLength = state.ropeRest
-                if (state.radialVelocity < 0f) state.radialVelocity *= -0.22f
+                if (state.radialVelocity < 0f) state.radialVelocity *= -0.24f
             }
             state.ropeLength = state.ropeLength.coerceAtMost(state.ropeRest + dp(620f))
 
             val lengthDp = max(65f, state.ropeLength / density)
-            val breeze = sin(now / 1750.0).toFloat() * 0.055f
-            val angularAcceleration = -(1050f / lengthDp) * sin(state.angle) -
-                (0.44f + abs(state.radialVelocity) / max(1f, state.ropeRest) * 0.065f) * state.angularVelocity + breeze
+            val breeze = sin(now / profile.swayPeriodMs).toFloat() * profile.idleForce
+            val angularAcceleration = -(profile.gravity / lengthDp) * sin(state.angle) -
+                (profile.angularDamping + abs(state.radialVelocity) / max(1f, state.ropeRest) * 0.055f) * state.angularVelocity + breeze
             state.angularVelocity += angularAcceleration * dt
             state.angle += state.angularVelocity * dt
 
@@ -231,10 +296,10 @@ class DangleView(context: Context) : View(context) {
             val limit = asin((screenSafeHalf / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
             if (state.angle > limit) {
                 state.angle = limit
-                if (state.angularVelocity > 0f) state.angularVelocity *= -0.25f
+                if (state.angularVelocity > 0f) state.angularVelocity *= -0.26f
             } else if (state.angle < -limit) {
                 state.angle = -limit
-                if (state.angularVelocity < 0f) state.angularVelocity *= -0.25f
+                if (state.angularVelocity < 0f) state.angularVelocity *= -0.26f
             }
 
             if (abs(state.angularVelocity) < 0.006f && abs(state.angle) < 0.01f &&
@@ -248,7 +313,7 @@ class DangleView(context: Context) : View(context) {
 
     private fun drawCord(
         c: Canvas, ax: Float, ay: Float, px: Float, py: Float,
-        state: MotionState, now: Long
+        state: MotionState, profile: CharmPersonality, now: Long
     ) {
         val tension = ((state.ropeLength - state.ropeRest) / dp(620f)).coerceIn(0f, 1f)
         val speed = abs(state.angularVelocity)
@@ -276,7 +341,8 @@ class DangleView(context: Context) : View(context) {
 
         if (state.pulling && state.pullDistance > dp(3f)) {
             paint.strokeWidth = dp(1.2f + tension * 1.5f)
-            paint.color = Color.argb((85 + 125 * tension).toInt(), 255, 232, 178)
+            val base = profile.glowColor
+            paint.color = Color.argb(90 + (125 * tension).toInt(), Color.red(base), Color.green(base), Color.blue(base))
             c.drawPath(cord, paint)
         }
         paint.style = Paint.Style.FILL
@@ -286,7 +352,8 @@ class DangleView(context: Context) : View(context) {
 
     private fun drawCharm(
         c: Canvas, bitmap: Bitmap, pivotX: Float, pivotY: Float,
-        targetWidth: Float, targetHeight: Float, swingAngle: Float
+        targetWidth: Float, targetHeight: Float, swingAngle: Float,
+        profile: CharmPersonality, now: Long
     ) {
         val dst = RectF(
             pivotX - targetWidth * 0.5f,
@@ -294,8 +361,10 @@ class DangleView(context: Context) : View(context) {
             pivotX + targetWidth * 0.5f,
             pivotY + targetHeight
         )
+        val speedFactor = 0.18f + min(1f, abs(activeMotion().angularVelocity) / 4f)
+        val idleWobble = sin(now / profile.swayPeriodMs * 1.6).toFloat() * profile.idleTiltDegrees * speedFactor
         c.save()
-        val bodyRotation = Math.toDegrees(swingAngle.toDouble()).toFloat() * 0.24f
+        val bodyRotation = Math.toDegrees(swingAngle.toDouble()).toFloat() * profile.bodyRotation + idleWobble
         c.rotate(bodyRotation, pivotX, pivotY + targetHeight * 0.14f)
         paint.style = Paint.Style.FILL
         paint.alpha = 255
@@ -304,21 +373,72 @@ class DangleView(context: Context) : View(context) {
         c.restore()
     }
 
-    private fun drawSpecularGlint(
-        c: Canvas, pivotX: Float, pivotY: Float, targetWidth: Float,
-        targetHeight: Float, now: Long
+    /** Subtle movement-linked highlights make each ornament feel different. */
+    private fun drawPersonalityEffect(
+        c: Canvas, x: Float, y: Float, w: Float, h: Float,
+        state: MotionState, now: Long
     ) {
-        val phase = now / 940.0 + selectedCharm * 0.91
-        val pulse = sin(phase).toFloat() * 0.5f + 0.5f
-        val x = pivotX + targetWidth * (0.25f + 0.07f * sin(phase * 0.7).toFloat())
-        val y = pivotY + targetHeight * (0.43f + 0.05f * cos(phase).toFloat())
+        val phase = now / personalities[selectedCharm].swayPeriodMs
+        val energy = min(1f, abs(state.angularVelocity) / 4.5f)
+        val alpha = (20 + energy * 75).toInt().coerceIn(20, 95)
         paint.style = Paint.Style.STROKE
         paint.strokeCap = Paint.Cap.ROUND
-        paint.strokeWidth = dp(0.8f)
-        paint.color = Color.argb((14 + pulse * 38).toInt(), 255, 255, 255)
-        val radius = dp(2.4f + pulse * 1.7f)
-        c.drawLine(x - radius, y, x + radius, y, paint)
-        c.drawLine(x, y - radius, x, y + radius, paint)
+
+        when (selectedCharm) {
+            0 -> {
+                // Evil Eye: a cool, slow halo glides around the glass pendant.
+                paint.strokeWidth = dp(1.1f)
+                paint.color = Color.argb(alpha, 76, 175, 255)
+                val halo = RectF(x - w * 0.53f, y + h * 0.32f, x + w * 0.53f, y + h * 0.88f)
+                c.drawArc(halo, (phase * 50.0).toFloat(), 92f, false, paint)
+            }
+            1 -> {
+                // Chili & Lemon: a few tiny green leaf glints follow its wider sway.
+                paint.style = Paint.Style.FILL
+                for (i in 0..2) {
+                    val t = phase + i * 2.1
+                    val px = x + sin(t).toFloat() * w * 0.57f
+                    val py = y + h * (0.42f + i * 0.12f)
+                    paint.color = Color.argb(alpha, 112, 180, 74)
+                    c.drawOval(RectF(px - dp(2f), py - dp(4f), px + dp(2f), py + dp(4f)), paint)
+                }
+            }
+            2 -> {
+                // Daruma: warm gold sparkles pulse at the edges as it settles.
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = dp(1.1f)
+                paint.color = Color.argb(alpha, 255, 205, 110)
+                for (side in -1..1 step 2) {
+                    val sx = x + side * w * 0.55f
+                    val sy = y + h * (0.36f + (sin(phase * 1.8).toFloat() * 0.03f))
+                    c.drawLine(sx - dp(3f), sy, sx + dp(3f), sy, paint)
+                    c.drawLine(sx, sy - dp(3f), sx, sy + dp(3f), paint)
+                }
+            }
+            3 -> {
+                // Lucky Cat: a bell glint flashes briefly on the forward part of its swing.
+                val pulse = (sin(now / 180.0).toFloat() * 0.5f + 0.5f)
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = dp(1f)
+                paint.color = Color.argb((alpha * pulse).toInt().coerceIn(0, 100), 255, 220, 125)
+                val gx = x + w * 0.12f
+                val gy = y + h * 0.52f
+                val r = dp(2.2f + pulse * 1.6f)
+                c.drawLine(gx - r, gy, gx + r, gy, paint)
+                c.drawLine(gx, gy - r, gx, gy + r, paint)
+            }
+            else -> {
+                // Oni Mask: slow ember-like red/orange particles around the lower edge.
+                paint.style = Paint.Style.FILL
+                for (i in 0..3) {
+                    val t = phase * 0.7 + i * 1.57
+                    val px = x + cos(t).toFloat() * w * 0.56f
+                    val py = y + h * (0.72f + sin(t).toFloat() * 0.15f)
+                    paint.color = Color.argb(alpha, 255, 105, 65)
+                    c.drawCircle(px, py, dp(1.2f + energy), paint)
+                }
+            }
+        }
         paint.style = Paint.Style.FILL
     }
 

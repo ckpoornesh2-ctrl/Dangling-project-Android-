@@ -24,7 +24,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-started single decorative hanging lucky charm overlay; closed by dragging to the bottom or from the notification." />
+                android:value="User-started single decorative hanging lucky charm overlay with touch menu; closed by dragging to the bottom or from the notification." />
         </service>
     </application>
 </manifest>

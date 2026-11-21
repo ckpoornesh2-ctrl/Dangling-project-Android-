@@ -1,0 +1,47 @@
+[
+  {
+    "index": 0,
+    "name": "Sora",
+    "frames": 7,
+    "frame_width": 128,
+    "frame_height": 160,
+    "file": "heros/hero_0.png",
+    "bytes": 155465
+  },
+  {
+    "index": 1,
+    "name": "Hana",
+    "frames": 7,
+    "frame_width": 128,
+    "frame_height": 160,
+    "file": "heros/hero_1.png",
+    "bytes": 163014
+  },
+  {
+    "index": 2,
+    "name": "Kaito",
+    "frames": 7,
+    "frame_width": 128,
+    "frame_height": 160,
+    "file": "heros/hero_2.png",
+    "bytes": 153177
+  },
+  {
+    "index": 3,
+    "name": "Miyu",
+    "frames": 7,
+    "frame_width": 128,
+    "frame_height": 160,
+    "file": "heros/hero_3.png",
+    "bytes": 159539
+  },
+  {
+    "index": 4,
+    "name": "Ren",
+    "frames": 7,
+    "frame_width": 128,
+    "frame_height": 160,
+    "file": "heros/hero_4.png",
+    "bytes": 154768
+  }
+]

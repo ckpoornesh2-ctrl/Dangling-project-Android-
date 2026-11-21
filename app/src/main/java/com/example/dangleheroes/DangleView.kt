@@ -1,106 +1,136 @@
 package com.example.dangleheroes
 
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RectF
+import android.graphics.*
 import android.os.SystemClock
 import android.view.View
 import kotlin.math.*
 
 /**
- * Full-screen transparent renderer. Touch is handled by the small hit target
- * managed by DangleOverlayService, so the rest of the phone remains usable.
+ * Full-screen pixel-art renderer.
+ *
+ * Physics model:
+ * - angular pendulum motion for the swing
+ * - radial spring/damper for rope extension and recoil
+ * - tangential velocity from the user's drag gesture
+ * - soft angular limits derived from the actual screen-safe area
  */
 class DangleView(context: Context) : View(context) {
     private val density = resources.displayMetrics.density
-    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val sprites = ArrayList<Bitmap>()
 
-    var onHeroPosition: ((Float, Float) -> Unit)? = null
-    private var heroIndex = 0
+    private var hero = 0
+    private var frame = 0
+    private var animClock = 0f
+
     private var angle = 0.02f
     private var angularVelocity = 0f
-    private var ropeRest = 188f * density
+    private var ropeRest = 180f * density
     private var ropeLength = ropeRest
-    private var stretch = 0f
-    private var dragging = false
-    private var dragStartY = 0f
-    private var dragStartX = 0f
-    private var lastY = 0f
-    private var lastTime = 0L
-    private var releaseBoost = 0f
-    private var lastFrame = SystemClock.uptimeMillis()
+    private var radialVelocity = 0f
+    private var pullDistance = 0f
+    private var pulling = false
+    private var pullStartX = 0f
+    private var pullStartY = 0f
+    private var lastPointerX = 0f
+    private var lastPointerY = 0f
+    private var lastPointerTime = 0L
+    private var pointerVX = 0f
+    private var pointerVY = 0f
+    private var lastFrameTime = SystemClock.uptimeMillis()
+
     private var screenW = 0f
     private var screenH = 0f
+    private var anchorX = 0f
+    private var anchorY = 0f
     private var heroX = 0f
     private var heroY = 0f
-    private var transition = 1f
-    private var oldHero = 0
-    private var transitionStart = 0L
+    private val spriteWidth = 64f
+    private val spriteHeight = 80f
+
+    var onHeroPosition: ((Float, Float) -> Unit)? = null
 
     init {
-        setLayerType(View.LAYER_TYPE_HARDWARE, null)
-    }
-
-    fun setHero(index: Int) {
-        oldHero = heroIndex
-        heroIndex = ((index % 4) + 4) % 4
-        transition = 0f
-        transitionStart = SystemClock.uptimeMillis()
-        invalidate()
-    }
-
-    fun nextHero() = setHero(heroIndex + 1)
-
-    fun beginDrag(pointerX: Float, pointerY: Float) {
-        dragging = true
-        dragStartX = pointerX
-        dragStartY = pointerY
-        lastY = pointerY
-        lastTime = SystemClock.uptimeMillis()
-        angularVelocity = 0f
-        releaseBoost = 0f
-    }
-
-    fun dragTo(pointerX: Float, pointerY: Float) {
-        if (!dragging) return
-        val dx = pointerX - dragStartX
-        val dy = (pointerY - dragStartY).coerceAtLeast(0f)
-        val maxStretch = 235f * density
-        stretch = dy.coerceIn(0f, maxStretch)
-        ropeLength = ropeRest + stretch
-        val anchorX = screenW * 0.5f
-        val maxAngle = 1.22f
-        angle = (dx / (screenW * 0.46f)).coerceIn(-maxAngle, maxAngle)
-        val now = SystemClock.uptimeMillis()
-        val dt = ((now - lastTime).coerceAtLeast(1L)) / 1000f
-        releaseBoost = ((pointerY - lastY) / dt).coerceIn(-2600f, 2600f)
-        lastY = pointerY
-        lastTime = now
-        invalidate()
-    }
-
-    fun release() {
-        if (!dragging) return
-        dragging = false
-        // Elastic sling: stretch energy and upward hand velocity launch the hero.
-        val elasticKick = (stretch / density) * 0.030f
-        angularVelocity += (releaseBoost / 2600f) * 2.0f
-        ropeLength = ropeRest
-        stretch = 0f
-        if (elasticKick > 0.05f) {
-            angle += (if (angle == 0f) 0.08f else sign(angle) * elasticKick).coerceIn(-0.28f, 0.28f)
-            angularVelocity += sign(angle) * elasticKick * 2.4f
+        for (i in 0..3) {
+            context.assets.open("heroes/hero_$i.png").use {
+                sprites.add(BitmapFactory.decodeStream(it))
+            }
         }
+        setLayerType(LAYER_TYPE_HARDWARE, null)
+    }
+
+    fun chooseHero(index: Int) {
+        hero = ((index % sprites.size) + sprites.size) % sprites.size
+        animClock = 0f
         invalidate()
     }
 
-    fun onTap() = nextHero()
+    fun nextHero() = chooseHero(hero + 1)
+
+    fun beginPull(x: Float, y: Float) {
+        pulling = true
+        pullStartX = x
+        pullStartY = y
+        lastPointerX = x
+        lastPointerY = y
+        lastPointerTime = SystemClock.uptimeMillis()
+        pointerVX = 0f
+        pointerVY = 0f
+        angularVelocity = 0f
+        radialVelocity = 0f
+    }
+
+    fun movePull(x: Float, y: Float) {
+        if (!pulling) return
+
+        val maxPull = min(screenH * 0.22f, 280f * density)
+        val dx = x - pullStartX
+        pullDistance = (y - pullStartY).coerceIn(0f, maxPull)
+
+        // Sideways movement sets the swing angle; downward movement stretches the rope.
+        val maxPullAngle = 1.05f
+        angle = (dx / max(ropeRest, 1f)).coerceIn(-maxPullAngle, maxPullAngle)
+        ropeLength = ropeRest + pullDistance
+
+        val now = SystemClock.uptimeMillis()
+        val dt = ((now - lastPointerTime).coerceAtLeast(1L)) / 1000f
+        pointerVX = ((x - lastPointerX) / dt).coerceIn(-2400f, 2400f)
+        pointerVY = ((y - lastPointerY) / dt).coerceIn(-2400f, 2400f)
+        lastPointerX = x
+        lastPointerY = y
+        lastPointerTime = now
+        invalidate()
+    }
+
+    fun releasePull() {
+        if (!pulling) return
+        pulling = false
+
+        val extension = pullDistance
+        val extensionRatio = (extension / max(1f, 280f * density)).coerceIn(0f, 1f)
+
+        // Convert drag velocity into angular/tangential momentum.
+        val tangentialKick = (pointerVX / max(1f, ropeRest)) * 0.62f
+        angularVelocity += tangentialKick.coerceIn(-4.2f, 4.2f)
+
+        // A stretched elastic tether pulls radially back toward rest length.
+        // A deliberate downward pull stores energy; release produces an upward recoil.
+        val springKick = sqrt(max(0f, extension * 0.055f)) * 5.0f
+        radialVelocity = -springKick.coerceIn(0f, 520f * density)
+
+        // A fast upward finger flick adds a little extra launch energy.
+        if (pointerVY < -180f) {
+            radialVelocity += (pointerVY * 0.16f).coerceAtLeast(-300f * density)
+        }
+
+        // Pulling far to one side gives the swing a smooth initial push.
+        angularVelocity += (if (abs(angle) < 0.06f) sign(pointerVX) else sign(angle)) *
+            extensionRatio * 0.75f
+
+        pullDistance = 0f
+        invalidate()
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -109,190 +139,128 @@ class DangleView(context: Context) : View(context) {
         if (screenW <= 0f || screenH <= 0f) return
 
         val now = SystemClock.uptimeMillis()
-        val dt = ((now - lastFrame).coerceIn(1L, 24L)) / 1000f
-        lastFrame = now
+        val dt = ((now - lastFrameTime).coerceIn(1L, 24L)) / 1000f
+        lastFrameTime = now
 
-        if (!dragging) {
-            // Pendulum + damped spring. The spring length returns smoothly after release.
-            val gravity = 8.8f
-            val acceleration = -(gravity / (ropeRest / density)) * sin(angle) -
-                0.82f * angularVelocity
-            angularVelocity += acceleration * dt
-            angle += angularVelocity * dt
-            angle = angle.coerceIn(-1.30f, 1.30f)
-            ropeLength += (ropeRest - ropeLength) * min(1f, dt * 8.5f)
-            if (abs(angularVelocity) < 0.0008f && abs(angle) < 0.012f) {
-                angle *= 0.985f
-                angularVelocity *= 0.96f
-            }
-        }
+        anchorX = screenW * 0.5f
+        anchorY = 2f * density
+        ropeRest = min(screenW * 0.44f, screenH * 0.27f).coerceAtLeast(132f * density)
 
-        val anchorX = screenW * 0.5f
-        val anchorY = 1.5f * density
-        val sway = sin(now / 470.0).toFloat() * 2.0f * density
-        val heroCenterX = anchorX + sin(angle) * ropeLength
-        val heroCenterY = anchorY + cos(angle) * ropeLength + 46f * density
-        heroX = heroCenterX
-        heroY = heroCenterY
-        drawRope(canvas, anchorX, anchorY, heroCenterX, heroCenterY - 34f * density, sway)
-        drawHero(canvas, heroCenterX, heroCenterY, now)
+        if (!pulling) stepPhysics(dt)
 
-        val elapsed = (now - transitionStart).coerceAtLeast(0L)
-        transition = (elapsed / 260f).coerceIn(0f, 1f)
-        onHeroPosition?.invoke(heroCenterX, heroCenterY)
+        val safeHalfWidth = screenW * 0.5f - 38f * density
+        val maxAngle = asin((safeHalfWidth / max(ropeLength, 1f)).coerceIn(0f, 0.96f))
+        val visibleAngle = angle.coerceIn(-maxAngle, maxAngle)
+
+        // Derive both rope and hero position from the same constrained angle.
+        // This keeps the tether physically connected and prevents edge clipping.
+        heroX = anchorX + sin(visibleAngle) * ropeLength
+        heroY = anchorY + cos(visibleAngle) * ropeLength
+
+        drawTether(canvas, anchorX, anchorY, heroX, heroY, now)
+        animClock += dt
+        val fps = if (pulling) 10f else (5.5f + min(4f, abs(angularVelocity) * 0.8f))
+        frame = (animClock * fps).toInt() % 4
+        drawSprite(canvas, heroX, heroY, visibleAngle)
+
+        onHeroPosition?.invoke(heroX, heroY)
         postInvalidateOnAnimation()
     }
 
-    private fun drawRope(c: Canvas, ax: Float, ay: Float, hx: Float, hy: Float, sway: Float) {
-        val dx = hx - ax
-        val dy = hy - ay
-        val tension = (stretch / (235f * density)).coerceIn(0f, 1f)
-        val midX = ax + dx * 0.48f + sway * (1f - tension)
-        val midY = ay + dy * 0.48f
+    private fun stepPhysics(dt: Float) {
+        // Radial spring: rope length returns to its rest length with damped recoil.
+        val extension = ropeLength - ropeRest
+        val radialAcceleration = -30f * extension - 8.5f * radialVelocity
+        radialVelocity += radialAcceleration * dt
+        ropeLength += radialVelocity * dt
+        if (ropeLength < ropeRest) {
+            ropeLength = ropeRest
+            if (radialVelocity < 0f) radialVelocity = 0f
+        }
+        ropeLength = ropeLength.coerceAtMost(ropeRest + 280f * density)
+
+        // Pendulum equation with damping. Gravity increases the swing's return force.
+        val lengthDp = max(70f, ropeLength / density)
+        val angularAcceleration = -(9.81f / lengthDp) * sin(angle) -
+            (0.34f + abs(radialVelocity) / max(1f, ropeRest) * 0.12f) * angularVelocity
+        angularVelocity += angularAcceleration * dt
+        angle += angularVelocity * dt
+
+        // Soft screen-edge barrier. Limit is calculated from screen width and sprite bounds.
+        val safeHalfWidth = screenW * 0.5f - 38f * density
+        val maxAngle = asin((safeHalfWidth / max(ropeLength, 1f)).coerceIn(0f, 0.96f))
+        if (angle > maxAngle) {
+            angle = maxAngle
+            if (angularVelocity > 0f) angularVelocity *= -0.24f
+        } else if (angle < -maxAngle) {
+            angle = -maxAngle
+            if (angularVelocity < 0f) angularVelocity *= -0.24f
+        }
+
+        if (abs(angularVelocity) < 0.001f && abs(angle) < 0.012f &&
+            abs(ropeLength - ropeRest) < 0.8f * density) {
+            angle *= 0.985f
+            angularVelocity *= 0.94f
+        }
+    }
+
+    private fun drawTether(c: Canvas, ax: Float, ay: Float, hx: Float, hy: Float, now: Long) {
+        val tension = ((ropeLength - ropeRest) / (280f * density)).coerceIn(0f, 1f)
+        val swingSpeed = abs(angularVelocity)
+        val sag = if (pulling) 0f else (2.5f + 3f * (1f - min(1f, swingSpeed))) * density
+        val sway = if (pulling) 0f else sin(now / 370.0).toFloat() * 2.2f * density
+        val midX = (ax + hx) * 0.5f + sway
+        val midY = (ay + hy) * 0.5f + sag * (1f - tension)
+
         val rope = Path().apply {
             moveTo(ax, ay)
-            quadTo(midX, midY, hx, hy)
+            quadTo(midX, midY, hx, hy - 23f * density)
         }
-        p.style = Paint.Style.STROKE
-        p.strokeWidth = 7f * density
-        p.color = Color.argb(95, 0, 0, 0)
-        c.drawPath(rope, p)
-        p.strokeWidth = 3.8f * density
-        p.color = Color.rgb(25, 29, 39)
-        c.drawPath(rope, p)
-        p.strokeWidth = 1.25f * density
-        p.color = Color.rgb(198, 207, 220)
-        c.drawPath(rope, p)
-        p.style = Paint.Style.FILL
-        p.color = Color.WHITE
-        c.drawCircle(ax, ay, 3.0f * density, p)
-        if (tension > 0.05f) {
-            p.color = Color.argb((80 + tension * 150).toInt(), 110, 205, 255)
-            p.style = Paint.Style.STROKE
-            p.strokeWidth = (1.5f + tension * 2f) * density
-            c.drawPath(rope, p)
-            p.style = Paint.Style.FILL
+        paint.style = Paint.Style.STROKE
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.strokeWidth = 6f * density
+        paint.color = Color.argb(110, 0, 0, 0)
+        c.drawPath(rope, paint)
+        paint.strokeWidth = 3.2f * density
+        paint.color = Color.rgb(37, 43, 54)
+        c.drawPath(rope, paint)
+        paint.strokeWidth = 1.1f * density
+        paint.color = Color.rgb(215, 222, 232)
+        c.drawPath(rope, paint)
+
+        if (pulling && pullDistance > 2f) {
+            paint.strokeWidth = (1.4f + 2.2f * tension) * density
+            paint.color = Color.argb((75 + 150 * tension).toInt(), 110, 205, 255)
+            c.drawPath(rope, paint)
         }
+        paint.style = Paint.Style.FILL
+        paint.color = Color.WHITE
+        c.drawCircle(ax, ay, 3f * density, paint)
+        // Small anchor ring gives the rope a visible attachment point.
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1.4f * density
+        paint.color = Color.rgb(190, 199, 215)
+        c.drawCircle(ax, ay + 4f * density, 4.5f * density, paint)
+        paint.style = Paint.Style.FILL
     }
 
-    private fun drawHero(c: Canvas, x: Float, y: Float, now: Long) {
-        val bob = sin(now / 190.0).toFloat() * 2.2f * density
-        c.save()
-        c.translate(x, y + bob)
-        c.rotate(Math.toDegrees(angle.toDouble()).toFloat() * 0.72f)
+    private fun drawSprite(c: Canvas, x: Float, y: Float, swingAngle: Float) {
+        val bitmap = sprites[hero]
+        val src = Rect(frame * 64, 0, (frame + 1) * 64, 80)
         val scale = density
-        c.scale(scale, scale)
-        if (transition < 1f) {
-            val t = transition
-            c.save()
-            c.scale(0.88f + 0.12f * t, 0.88f + 0.12f * t)
-            drawCharacter(c, heroIndex, now)
-            c.restore()
-        } else {
-            drawCharacter(c, heroIndex, now)
-        }
+        val dst = RectF(
+            x - 32f * scale,
+            y - 17f * scale,
+            x + 32f * scale,
+            y + 63f * scale
+        )
+        c.save()
+        // Body follows the swing but counter-rotates slightly like a hanging body.
+        val bodyRotation = Math.toDegrees(swingAngle.toDouble()).toFloat() * 0.58f
+        c.rotate(bodyRotation, x, y)
+        paint.isFilterBitmap = false
+        c.drawBitmap(bitmap, src, dst, paint)
+        paint.isFilterBitmap = true
         c.restore()
-    }
-
-    private fun drawCharacter(c: Canvas, index: Int, now: Long) {
-        when (index) {
-            0 -> spider(c, now)
-            1 -> sentinel(c, now)
-            2 -> storm(c, now)
-            else -> trickster(c, now)
-        }
-    }
-
-    private fun stroke(c: Canvas, color: Int, width: Float, vararg xy: Float) {
-        p.color = color; p.style = Paint.Style.STROKE; p.strokeWidth = width
-        val path = Path()
-        path.moveTo(xy[0], xy[1])
-        var i = 2
-        while (i + 1 < xy.size) { path.lineTo(xy[i], xy[i + 1]); i += 2 }
-        c.drawPath(path, p); p.style = Paint.Style.FILL
-    }
-
-    private fun fill(c: Canvas, color: Int, vararg xy: Float) {
-        val path = Path()
-        path.moveTo(xy[0], xy[1])
-        var i = 2
-        while (i + 1 < xy.size) { path.lineTo(xy[i], xy[i + 1]); i += 2 }
-        path.close(); p.color = color; p.style = Paint.Style.FILL; c.drawPath(path, p)
-    }
-
-    private fun limb(c: Canvas, color: Int, width: Float, x1: Float, y1: Float, x2: Float, y2: Float) {
-        stroke(c, Color.argb(100, 0, 0, 0), width + 2f, x1, y1, x2, y2)
-        stroke(c, color, width, x1, y1, x2, y2)
-    }
-
-    private fun head(c: Canvas, color: Int, eyeColor: Int = Color.WHITE) {
-        p.color = Color.rgb(12, 15, 23); c.drawOval(RectF(-11f, -31f, 11f, -7f), p)
-        p.color = color; c.drawOval(RectF(-9f, -30f, 9f, -9f), p)
-        p.color = eyeColor
-        c.drawOval(RectF(-6.8f, -22f, -1.2f, -19f), p)
-        c.drawOval(RectF(1.2f, -22f, 6.8f, -19f), p)
-    }
-
-    private fun spider(c: Canvas, now: Long) {
-        val red = Color.rgb(194, 27, 43); val blue = Color.rgb(24, 54, 120)
-        // athletic split-pose body
-        fill(c, blue, -10f,-7f, 10f,-7f, 13f,17f, 7f,31f, -8f,29f, -14f,14f)
-        fill(c, red, -10f,-7f, 10f,-7f, 8f,12f, -8f,12f)
-        limb(c, red, 6f, -7f,0f,-23f,10f); limb(c, blue, 5f, -23f,10f,-30f,25f)
-        limb(c, red, 6f, 7f,0f,22f,9f); limb(c, blue, 5f, 22f,9f,29f,23f)
-        limb(c, blue, 7f, -6f,26f,-16f,43f); limb(c, red, 6f, -16f,43f,-25f,55f)
-        limb(c, blue, 7f, 6f,26f,17f,42f); limb(c, red, 6f, 17f,42f,22f,56f)
-        head(c, red)
-        // web motif on chest
-        stroke(c, Color.rgb(240, 205, 200), 0.8f, -5f,2f, 0f,10f, 5f,2f)
-        stroke(c, Color.rgb(240, 205, 200), 0.7f, -7f,7f, 0f,5f, 7f,7f)
-        stroke(c, Color.rgb(240, 205, 200), 0.7f, -6f,12f, 0f,15f, 6f,12f)
-    }
-
-    private fun sentinel(c: Canvas, now: Long) {
-        val black = Color.rgb(23,27,39); val grey = Color.rgb(78,88,108)
-        val cape = Path().apply { moveTo(-9f,-5f); lineTo(-26f,18f); lineTo(-32f,64f); lineTo(-5f,52f); lineTo(25f,65f); lineTo(12f,13f); close() }
-        p.color = Color.rgb(8,10,17); c.drawPath(cape,p)
-        stroke(c, Color.rgb(55,65,84), 1.2f, -24f,23f,-27f,57f,-6f,49f)
-        fill(c, black, -9f,-7f, 9f,-7f, 12f,27f, 6f,37f, -8f,36f, -13f,24f)
-        limb(c, grey, 7f,-7f,0f,-22f,12f); limb(c,black,6f,-22f,12f,-29f,28f)
-        limb(c, grey, 7f,7f,0f,20f,13f); limb(c,black,6f,20f,13f,26f,28f)
-        limb(c,black,8f,-7f,32f,-16f,48f); limb(c,grey,6f,-16f,48f,-20f,60f)
-        limb(c,black,8f,7f,32f,16f,48f); limb(c,grey,6f,16f,48f,18f,60f)
-        fill(c, black, -10f,-28f,-14f,-42f,-4f,-33f, 4f,-33f,14f,-42f,10f,-27f)
-        head(c, black, Color.rgb(244,211,140))
-        stroke(c, Color.rgb(178,151,96), 2f, -7f,5f,7f,5f)
-    }
-
-    private fun storm(c: Canvas, now: Long) {
-        val blue = Color.rgb(38,72,145); val red = Color.rgb(145,25,43); val gold = Color.rgb(238,188,67)
-        val wave = sin(now / 150.0).toFloat() * 4f
-        fill(c, red, -8f,-6f, 9f,-6f, 27f,17f, 19f,63f, 1f,51f, -23f,64f, -27f,18f)
-        stroke(c, gold, 2f, -20f,25f,-12f,36f,-22f,50f)
-        fill(c, blue, -10f,-7f,10f,-7f,13f,25f,6f,36f,-8f,35f,-13f,22f)
-        limb(c, gold,6f,-7f,0f,-20f,12f); limb(c,blue,6f,-20f,12f,-28f,26f)
-        limb(c, gold,6f,7f,0f,21f,12f); limb(c,blue,6f,21f,12f,28f,27f)
-        limb(c,blue,8f,-7f,32f,-15f,48f); limb(c,gold,6f,-15f,48f,-21f,60f)
-        limb(c,blue,8f,7f,32f,16f,48f); limb(c,gold,6f,16f,48f,22f,60f)
-        head(c, Color.rgb(184,145,105))
-        stroke(c, gold, 2f, -7f,4f,7f,4f)
-        stroke(c, Color.argb(210,255,231,126), 2.2f, 24f, 2f+wave, 15f,17f+wave, 25f,15f+wave, 15f,31f+wave)
-    }
-
-    private fun trickster(c: Canvas, now: Long) {
-        val green = Color.rgb(25,111,75); val gold = Color.rgb(210,164,58)
-        val coat = Path().apply { moveTo(-8f,-6f); lineTo(-20f,16f); lineTo(-30f,60f); lineTo(-3f,52f); lineTo(25f,62f); lineTo(12f,15f); close() }
-        p.color = Color.rgb(11,64,47); c.drawPath(coat,p)
-        stroke(c, gold, 2f,-22f,25f,-13f,36f,-24f,50f)
-        fill(c, green,-10f,-7f,10f,-7f,12f,26f,7f,36f,-8f,36f,-13f,23f)
-        limb(c,gold,6f,-7f,0f,-21f,12f); limb(c,green,6f,-21f,12f,-27f,27f)
-        limb(c,gold,6f,7f,0f,20f,12f); limb(c,green,6f,20f,12f,26f,27f)
-        limb(c,green,7f,-7f,32f,-16f,48f); limb(c,gold,5f,-16f,48f,-22f,59f)
-        limb(c,green,7f,7f,32f,16f,48f); limb(c,gold,5f,16f,48f,21f,59f)
-        fill(c, gold,-10f,-26f,-18f,-42f,-3f,-33f, 4f,-33f,18f,-42f,10f,-26f)
-        head(c, Color.rgb(207,169,132))
-        val pulse = (sin(now / 180.0).toFloat()*0.5f+0.5f)
-        p.color = Color.argb((100+150*pulse).toInt(),75,255,170)
-        c.drawCircle(25f,27f,3f+2f*pulse,p)
     }
 }

@@ -37,18 +37,18 @@ class MainActivity : Activity() {
             setPadding(0, pad / 3, 0, pad)
         }
         val info = TextView(this).apply {
-            text = "Start the floating handle once. It stays at the top of your screen.\n\nDRAG THE TOP HOOK LEFT OR RIGHT to choose its position. Pull it DOWN to show your charm, or push it UP to hide it.\n\nTap a charm to switch. Hold for settings. Pull and release to swing. Tilt your phone for a gentle sway. Drag the charm down past the screen midpoint and release to close."
+            text = "Start the gold hook once. It stays at the top of your screen.\n\nDRAG THE HOOK LEFT OR RIGHT to choose its position. Pull it DOWN to smoothly drop your charm, or push it UP to smoothly retract it.\n\nTap a charm to switch. Hold for settings. Pull and release to swing. Tilt your phone for a gentle sway. Drag the charm down past the screen midpoint and release to close."
             textSize = 15f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
             setPadding(0, pad / 2, 0, pad)
         }
         val start = Button(this).apply {
-            text = "START FLOATING HANDLE"
+            text = "START LUCKY DANGLE"
             setOnClickListener { startOverlay() }
         }
         val stop = Button(this).apply {
-            text = "STOP FLOATING HANDLE"
+            text = "STOP LUCKY DANGLE"
             setOnClickListener {
                 stopService(Intent(this@MainActivity, DangleOverlayService::class.java))
             }

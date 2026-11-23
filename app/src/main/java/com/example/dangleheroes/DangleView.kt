@@ -34,6 +34,9 @@ import kotlin.math.sin
  */
 class DangleView(context: Context) : View(context), SensorEventListener {
     companion object {
+        const val TOP_HOOK_HEIGHT_DP = 58f
+        // Centre of the small lower eyelet within gold_hook.png (from top, as a fraction of image height).
+        const val TOP_HOOK_EYELET_CENTER_RATIO = 0.94f
         private val CHARM_NAMES = listOf(
             "Evil Eye", "Chili & Lemon", "Daruma", "Lucky Cat", "Oni Mask"
         )
@@ -105,7 +108,7 @@ class DangleView(context: Context) : View(context), SensorEventListener {
         isFilterBitmap = true
         isDither = true
     }
-    private val hookHeightDp = 62f
+    private val hookHeightDp = TOP_HOOK_HEIGHT_DP
 
     // Smooth, round satin-gold cord rendered as a shaded cylinder (no repeated/twisted texture).
     private val cordPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -135,11 +138,21 @@ class DangleView(context: Context) : View(context), SensorEventListener {
     private var screenH = 0f
     private var anchorY = dp(60f)
     private var anchorXOverride = Float.NaN
-    private var dangleVisible = true
+    // Visibility is animated so the cord and pendant physically deploy/retract from the top hook.
+    private var dangleVisible = false
+    private var visibilityProgress = 0f
+    private var visibilityFrom = 0f
+    private var visibilityTarget = 0f
+    private var visibilityStartedAt = 0L
+    private var visibilityAnimating = false
+    private val visibilityDurationMs = 560L
     private var paused = false
 
     /** Center of the active charm, used by the service to align the touch area. */
     var onCharmPosition: ((Float, Float) -> Unit)? = null
+
+    /** Called after the drop/retract transition finishes. The top hook stays visible. */
+    var onVisibilityAnimationFinished: ((Boolean) -> Unit)? = null
 
     fun setAnchorPosition(centerX: Float, cordStartY: Float) {
         anchorXOverride = centerX
@@ -148,21 +161,61 @@ class DangleView(context: Context) : View(context), SensorEventListener {
     }
 
     fun setDangleVisible(visible: Boolean) {
-        if (dangleVisible == visible) return
+        if (dangleVisible == visible &&
+            ((visible && visibilityProgress >= 1f && !visibilityAnimating) ||
+             (!visible && visibilityProgress <= 0f && !visibilityAnimating))) return
+
         dangleVisible = visible
-        if (!visible && sensorRegistered) {
-            sensorManager.unregisterListener(this)
-            sensorRegistered = false
-        } else if (visible && isAttachedToWindow && !sensorRegistered) {
+        visibilityFrom = visibilityProgress
+        visibilityTarget = if (visible) 1f else 0f
+        visibilityStartedAt = SystemClock.uptimeMillis()
+        visibilityAnimating = true
+
+        // Re-seed the rope from the fixed eyelet so every deployment begins connected.
+        activeMotion().ropeNodes.clear()
+        if (visible && isAttachedToWindow && !sensorRegistered) {
             tiltSensor?.let { sensor ->
                 sensorRegistered = sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
             }
         }
         lastFrameTime = SystemClock.uptimeMillis()
-        invalidate()
+        postInvalidateOnAnimation()
     }
 
     fun isDangleVisible(): Boolean = dangleVisible
+
+    private fun advanceVisibilityAnimation(now: Long) {
+        if (!visibilityAnimating) return
+        val elapsed = (now - visibilityStartedAt).coerceAtLeast(0L)
+        val t = (elapsed.toFloat() / visibilityDurationMs).coerceIn(0f, 1f)
+
+        // Opening drops with a soft ease-out and a tiny settling bounce. Closing
+        // retracts with a smooth ease-in so the pendant travels upward naturally.
+        val eased = if (visibilityTarget > visibilityFrom) {
+            val inverse = 1f - t
+            1f - inverse * inverse * inverse + 0.018f * kotlin.math.sin(Math.PI * t).toFloat() * (1f - t)
+        } else {
+            t * t * t
+        }
+        visibilityProgress = visibilityFrom + (visibilityTarget - visibilityFrom) * eased
+
+        if (t >= 1f) {
+            visibilityProgress = visibilityTarget
+            visibilityAnimating = false
+            if (!dangleVisible) {
+                activeMotion().ropeLength = activeMotion().ropeRest
+                activeMotion().radialVelocity = 0f
+                activeMotion().angularVelocity = 0f
+                activeMotion().angle = 0f
+                activeMotion().ropeNodes.clear()
+                if (sensorRegistered) {
+                    sensorManager.unregisterListener(this)
+                    sensorRegistered = false
+                }
+            }
+            onVisibilityAnimationFinished?.invoke(dangleVisible)
+        }
+    }
 
     init {
         for (i in CHARM_NAMES.indices) {
@@ -398,44 +451,66 @@ class DangleView(context: Context) : View(context), SensorEventListener {
         super.onDraw(canvas)
         screenW = width.toFloat()
         screenH = height.toFloat()
-        if (screenW <= 0f || screenH <= 0f || !dangleVisible) return
+        if (screenW <= 0f || screenH <= 0f) return
 
         val now = SystemClock.uptimeMillis()
         val elapsed = if (paused) 0f else ((now - lastFrameTime).coerceIn(1L, 32L)) / 1000f
         lastFrameTime = now
-
-        val state = activeMotion()
-        val profile = personalities[selectedCharm]
-        val bitmap = charms[selectedCharm]
-        if (!paused && !state.pulling) stepPhysics(state, elapsed, now, profile)
-
-        val aspect = bitmap.width.toFloat() / bitmap.height.toFloat()
-        val sizeScale = sizeWidthsDp[sizeIndex] / 92f
-        val maxCharmHeight = min(screenH * 0.34f, dp(270f) * sizeScale)
-        val maxCharmWidth = min(dp(sizeWidthsDp[sizeIndex]), screenW * 0.31f)
-        val charmWidth = min(maxCharmWidth, maxCharmHeight * aspect)
-        val charmHeight = charmWidth / aspect
+        advanceVisibilityAnimation(now)
 
         val anchorX = if (anchorXOverride.isNaN()) screenW * 0.5f else anchorXOverride.coerceIn(dp(24f), screenW - dp(24f))
-        val leftClearance = max(dp(10f), anchorX - charmWidth * 0.5f - dp(12f))
-        val rightClearance = max(dp(10f), screenW - anchorX - charmWidth * 0.5f - dp(12f))
-        val leftAngleLimit = asin((leftClearance / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
-        val rightAngleLimit = asin((rightClearance / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
-        val visibleAngle = state.angle.coerceIn(-leftAngleLimit, rightAngleLimit)
-        val pivotX = anchorX + sin(visibleAngle) * state.ropeLength
-        val pivotY = anchorY + cos(visibleAngle) * state.ropeLength
-
-        updateRopeNodes(state, anchorX, anchorY, pivotX, pivotY, elapsed)
-        drawCord(canvas, anchorX, anchorY, pivotX, pivotY, state, profile, now)
+        // The gold hook is the ONLY visible top control. The separate handle view
+        // is a transparent touch target used for left/right and up/down gestures.
         drawTopHook(canvas, anchorX, anchorY)
-        drawCharm(canvas, bitmap, pivotX, pivotY, charmWidth, charmHeight, visibleAngle, profile, now)
-        drawPersonalityEffect(canvas, pivotX, pivotY, charmWidth, charmHeight, state, now)
 
-        if (state.pulling && isInBottomDropZone(state.pointerY)) drawBottomDropHint(canvas)
-        onCharmPosition?.invoke(pivotX, pivotY + charmHeight * 0.53f)
+        val progress = visibilityProgress.coerceIn(0f, 1f)
+        if (progress > 0.002f) {
+            val state = activeMotion()
+            val profile = personalities[selectedCharm]
+            val bitmap = charms[selectedCharm]
+            if (!paused && !state.pulling && !visibilityAnimating && dangleVisible) {
+                stepPhysics(state, elapsed, now, profile)
+            }
 
-        // When paused, render a still frame and stop the animation callback loop.
-        if (!paused) postInvalidateOnAnimation()
+            val aspect = bitmap.width.toFloat() / bitmap.height.toFloat()
+            val sizeScale = sizeWidthsDp[sizeIndex] / 92f
+            val maxCharmHeight = min(screenH * 0.34f, dp(270f) * sizeScale)
+            val maxCharmWidth = min(dp(sizeWidthsDp[sizeIndex]), screenW * 0.31f)
+            val charmWidth = min(maxCharmWidth, maxCharmHeight * aspect)
+            val charmHeight = charmWidth / aspect
+
+            // Scale the pendulum length with the deployment animation: the string
+            // and charm physically travel down from the fixed hook eyelet and retract up.
+            val displayLength = state.ropeLength * progress
+            val leftClearance = max(dp(10f), anchorX - charmWidth * 0.5f - dp(12f))
+            val rightClearance = max(dp(10f), screenW - anchorX - charmWidth * 0.5f - dp(12f))
+            val safeLength = max(displayLength, dp(1f))
+            val leftAngleLimit = asin((leftClearance / safeLength).coerceIn(0f, 0.96f))
+            val rightAngleLimit = asin((rightClearance / safeLength).coerceIn(0f, 0.96f))
+            val visibleAngle = state.angle.coerceIn(-leftAngleLimit, rightAngleLimit)
+            val pivotX = anchorX + sin(visibleAngle) * displayLength
+            val pivotY = anchorY + cos(visibleAngle) * displayLength
+
+            updateRopeNodes(state, anchorX, anchorY, pivotX, pivotY, elapsed)
+
+            val alpha = (255f * (progress / 0.22f).coerceIn(0f, 1f)).toInt()
+            val layer = canvas.saveLayerAlpha(
+                0f, anchorY, screenW, (pivotY + charmHeight + dp(16f)).coerceAtMost(screenH), alpha
+            )
+            drawCord(canvas, anchorX, anchorY, pivotX, pivotY, state, profile, now)
+            drawCharm(canvas, bitmap, pivotX, pivotY, charmWidth, charmHeight, visibleAngle, profile, now, progress)
+            drawPersonalityEffect(canvas, pivotX, pivotY, charmWidth, charmHeight, state, now)
+            canvas.restoreToCount(layer)
+
+            if (state.pulling && isInBottomDropZone(state.pointerY)) drawBottomDropHint(canvas)
+            onCharmPosition?.invoke(pivotX, pivotY + charmHeight * 0.53f)
+        } else {
+            onCharmPosition?.invoke(anchorX, anchorY)
+        }
+
+        // Keep frames flowing only while the open charm is moving or the
+        // drop/retract animation is in progress. The collapsed hook is static.
+        if (visibilityAnimating || (dangleVisible && !paused)) postInvalidateOnAnimation()
     }
 
     /** Stable damped spring + pendulum integration using short substeps. */
@@ -622,11 +697,16 @@ class DangleView(context: Context) : View(context), SensorEventListener {
     private fun drawTopHook(canvas: Canvas, anchorX: Float, cordStartY: Float) {
         val hookHeight = dp(hookHeightDp)
         val hookWidth = hookHeight * hookBitmap.width.toFloat() / hookBitmap.height.toFloat()
+        // Anchor the rope at the centre of the asset's lower eyelet, not at
+        // the bottom pixel of the PNG. This lets the cord visibly pass through
+        // the ring and keeps the top of the asset flush with the screen anchor.
+        val eyeletOffset = hookHeight * TOP_HOOK_EYELET_CENTER_RATIO
+        val hookTop = cordStartY - eyeletOffset
         val dst = RectF(
             anchorX - hookWidth * 0.5f,
-            cordStartY - hookHeight,
+            hookTop,
             anchorX + hookWidth * 0.5f,
-            cordStartY
+            hookTop + hookHeight
         )
         canvas.drawBitmap(hookBitmap, null, dst, hookPaint)
     }
@@ -634,13 +714,16 @@ class DangleView(context: Context) : View(context), SensorEventListener {
     private fun drawCharm(
         c: Canvas, bitmap: Bitmap, pivotX: Float, pivotY: Float,
         targetWidth: Float, targetHeight: Float, swingAngle: Float,
-        profile: CharmPersonality, now: Long
+        profile: CharmPersonality, now: Long, deployment: Float
     ) {
+        val scale = 0.90f + 0.10f * deployment.coerceIn(0f, 1f)
+        val drawWidth = targetWidth * scale
+        val drawHeight = targetHeight * scale
         val dst = RectF(
-            pivotX - targetWidth * 0.5f,
+            pivotX - drawWidth * 0.5f,
             pivotY,
-            pivotX + targetWidth * 0.5f,
-            pivotY + targetHeight
+            pivotX + drawWidth * 0.5f,
+            pivotY + drawHeight
         )
         val speedFactor = 0.18f + min(1f, abs(activeMotion().angularVelocity) / 4f)
         val idleWobble = sin(now / profile.swayPeriodMs * 1.6).toFloat() * profile.idleTiltDegrees * speedFactor

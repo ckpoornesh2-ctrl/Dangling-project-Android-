@@ -56,8 +56,8 @@ class DangleOverlayService : Service() {
     private fun installOverlay() {
         screenWidth = resources.displayMetrics.widthPixels
         screenHeight = resources.displayMetrics.heightPixels
-        handleWidth = dp(60)
-        handleHeight = dp(62)
+        handleWidth = dp(64)
+        handleHeight = dp(58)
         handleTop = statusBarHeight()
 
         val draw = DangleView(this)
@@ -76,7 +76,9 @@ class DangleOverlayService : Service() {
 
         val savedFraction = preferences.getFloat(KEY_ANCHOR_FRACTION, 0.5f).coerceIn(0.08f, 0.92f)
         anchorX = screenWidth * savedFraction
-        anchorY = (handleTop + handleHeight + dp(62)).toFloat()
+        anchorY = handleTop +
+            DangleView.TOP_HOOK_HEIGHT_DP * DangleView.TOP_HOOK_EYELET_CENTER_RATIO *
+            resources.displayMetrics.density
         draw.setAnchorPosition(anchorX, anchorY)
         charmX = anchorX
         charmY = anchorY + dp(205)
@@ -84,6 +86,9 @@ class DangleOverlayService : Service() {
             charmX = x
             charmY = y
             updateTouchWindowPosition()
+        }
+        draw.onVisibilityAnimationFinished = { visible ->
+            if (!visible && !dangleOpen) removeCharmTouchWindow()
         }
 
         val handle = DangleHandleView(this)
@@ -142,8 +147,9 @@ class DangleOverlayService : Service() {
         if (open) {
             addCharmTouchWindow()
         } else {
+            // Keep the touch surface only while the pendant retracts; the renderer
+            // removes it after the upward animation has completed.
             dismissCharmMenu()
-            removeCharmTouchWindow()
         }
     }
 
@@ -318,7 +324,7 @@ class DangleOverlayService : Service() {
         }
         return builder
             .setContentTitle("Lucky Dangle is ready")
-            .setContentText("Use the top hook to open, hide or move your pendant")
+            .setContentText("Pull the gold hook down to drop the pendant; push up to retract it")
             .setSmallIcon(android.R.drawable.star_on)
             .addAction(Notification.Action.Builder(null, "Stop service", stopIntent).build())
             .setOngoing(true)

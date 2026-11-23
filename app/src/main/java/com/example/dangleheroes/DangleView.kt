@@ -3,9 +3,6 @@ package com.example.dangleheroes
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.BitmapShader
-import android.graphics.Matrix
-import android.graphics.Shader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -102,11 +99,17 @@ class DangleView(context: Context) : View(context), SensorEventListener {
     private val charms = ArrayList<Bitmap>(CHARM_NAMES.size)
     private val motions = ArrayList<MotionState>(CHARM_NAMES.size)
 
-    // Custom smooth cylindrical gold-silk texture; no braid, twist or spiral pattern.
-    private lateinit var cordTexture: Bitmap
-    private lateinit var cordShader: BitmapShader
-    private val cordMatrix = Matrix()
+    // Front-facing 3D hook asset. The cord's first point is aligned with its lower eyelet.
+    private lateinit var hookBitmap: Bitmap
+    private val hookPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        isFilterBitmap = true
+        isDither = true
+    }
+    private val hookHeightDp = 62f
+
+    // Smooth, round satin-gold cord rendered as a shaded cylinder (no repeated/twisted texture).
     private val cordPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val cordCenterPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val cordShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val cordHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val cordLowlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -174,42 +177,49 @@ class DangleView(context: Context) : View(context), SensorEventListener {
             motions.add(MotionState(rest, rest, if (i % 2 == 0) 0.018f else -0.018f))
         }
 
-        cordTexture = context.assets.open("charms/gold_silk_cord.png").use {
+        hookBitmap = context.assets.open("charms/gold_hook.png").use {
             BitmapFactory.decodeStream(it)
-        } ?: throw IllegalStateException("Missing gold cord texture: charms/gold_silk_cord.png")
-        cordShader = BitmapShader(cordTexture, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
-        cordMatrix.setScale(dp(5.6f) / cordTexture.width, dp(72f) / cordTexture.height)
-        cordShader.setLocalMatrix(cordMatrix)
+        } ?: throw IllegalStateException("Missing front hook asset: charms/gold_hook.png")
+        require(hookBitmap.width > 0 && hookBitmap.height > 0) {
+            "Hook image gold_hook.png has invalid dimensions"
+        }
 
         cordPaint.apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
-            strokeWidth = dp(5.6f)
-            shader = cordShader
+            strokeWidth = dp(4.6f)
+            color = Color.rgb(190, 124, 29)
             isFilterBitmap = true
             isDither = true
+        }
+        cordCenterPaint.apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = dp(2.7f)
+            color = Color.rgb(232, 181, 83)
         }
         cordShadowPaint.apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
-            strokeWidth = dp(8.2f)
-            color = Color.argb(105, 47, 27, 8)
+            strokeWidth = dp(6.7f)
+            color = Color.argb(145, 57, 34, 10)
         }
         cordHighlightPaint.apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
-            strokeWidth = dp(0.68f)
-            color = Color.argb(220, 255, 242, 202)
+            strokeWidth = dp(0.82f)
+            color = Color.argb(238, 255, 239, 190)
         }
         cordLowlightPaint.apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
-            strokeWidth = dp(0.55f)
-            color = Color.argb(135, 115, 65, 13)
+            strokeWidth = dp(0.9f)
+            color = Color.argb(205, 106, 65, 18)
         }
     }
 
@@ -417,6 +427,7 @@ class DangleView(context: Context) : View(context), SensorEventListener {
 
         updateRopeNodes(state, anchorX, anchorY, pivotX, pivotY, elapsed)
         drawCord(canvas, anchorX, anchorY, pivotX, pivotY, state, profile, now)
+        drawTopHook(canvas, anchorX, anchorY)
         drawCharm(canvas, bitmap, pivotX, pivotY, charmWidth, charmHeight, visibleAngle, profile, now)
         drawPersonalityEffect(canvas, pivotX, pivotY, charmWidth, charmHeight, state, now)
 
@@ -577,35 +588,47 @@ class DangleView(context: Context) : View(context), SensorEventListener {
             cord.lineTo(px, py)
         }
 
-        // A soft cast shadow, then the smooth satin-gold cylindrical texture.
+        // A continuous, round satin-gold filament: dark edge, warm body, fine centre sheen.
+        // No bitmap tiling, diagonal bands, knots or spiral-like end caps.
         c.drawPath(cord, cordShadowPaint)
         c.drawPath(cord, cordPaint)
+        c.drawPath(cord, cordCenterPaint)
 
-        // Fine off-centre specular and bronze edge highlights create a rounded 3D cord.
+        // Offset highlights follow the mostly vertical cord and give it a cylindrical profile.
         val highlight = Path()
-        cord.offset(-dp(0.78f), 0f, highlight)
+        cord.offset(-dp(1.05f), 0f, highlight)
         c.drawPath(highlight, cordHighlightPaint)
         val lowlight = Path()
-        cord.offset(dp(0.88f), 0f, lowlight)
+        cord.offset(dp(1.2f), 0f, lowlight)
         c.drawPath(lowlight, cordLowlightPaint)
 
         if (state.pulling && state.pullDistance > dp(3f)) {
             paint.style = Paint.Style.STROKE
             paint.strokeCap = Paint.Cap.ROUND
-            paint.strokeWidth = dp(1.15f + tension * 1.35f)
+            paint.strokeWidth = dp(1.0f + tension * 0.9f)
             val base = profile.glowColor
-            paint.color = Color.argb(65 + (95 * tension).toInt(), Color.red(base), Color.green(base), Color.blue(base))
+            paint.color = Color.argb(55 + (85 * tension).toInt(), Color.red(base), Color.green(base), Color.blue(base))
             c.drawPath(cord, paint)
         }
 
-        // Small polished end fitting where the new dynamic cord meets the charm's top bead.
-        paint.style = Paint.Style.FILL
-        paint.color = Color.rgb(219, 157, 55)
-        c.drawCircle(px, py, dp(2.5f), paint)
-        paint.color = Color.argb(220, 255, 239, 183)
-        c.drawCircle(px - dp(0.65f), py - dp(0.8f), dp(0.82f), paint)
-        paint.color = Color.rgb(255, 226, 174)
-        c.drawCircle(ax, ay, dp(2.4f), paint)
+        // The cord ends under the charm's existing top eyelet/bead stack. No loose end dot.
+    }
+
+    /**
+     * Draw the front-facing hook so its lower eyelet meets the cord's first point.
+     * The service positions anchorY at the bottom of this image, with its top
+     * aligned to the bottom edge of the persistent floating handle.
+     */
+    private fun drawTopHook(canvas: Canvas, anchorX: Float, cordStartY: Float) {
+        val hookHeight = dp(hookHeightDp)
+        val hookWidth = hookHeight * hookBitmap.width.toFloat() / hookBitmap.height.toFloat()
+        val dst = RectF(
+            anchorX - hookWidth * 0.5f,
+            cordStartY - hookHeight,
+            anchorX + hookWidth * 0.5f,
+            cordStartY
+        )
+        canvas.drawBitmap(hookBitmap, null, dst, hookPaint)
     }
 
     private fun drawCharm(

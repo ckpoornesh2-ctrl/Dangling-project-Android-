@@ -50,6 +50,16 @@
     "width": 48,
     "height": 128,
     "size_bytes": 307,
-    "style": "smooth cylindrical satin-gold texture; non-twisted"
+    "style": "smooth cylindrical satin-gold texture; non-twisted",
+    "status": "legacy_unused",
+    "note": "Retained for compatibility; DangleView now paints a smooth untwisted satin-gold cord directly."
+  },
+  {
+    "name": "gold_hook",
+    "file": "charms/gold_hook.png",
+    "width": 230,
+    "height": 404,
+    "size_bytes": 96275,
+    "style": "front-facing brushed-gold hook with lower eyelet; cord exits at the bottom of the eyelet"
   }
 ]

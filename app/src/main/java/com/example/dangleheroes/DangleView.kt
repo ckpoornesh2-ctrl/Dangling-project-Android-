@@ -24,6 +24,7 @@ import kotlin.math.atan2
 import kotlin.math.exp
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.sqrt
 import kotlin.math.min
 import kotlin.math.sign
 import kotlin.math.sin
@@ -67,6 +68,13 @@ class DangleView(context: Context) : View(context), SensorEventListener {
         CharmPersonality(38f, 10.9f, 1480f, 1.03f, 0.82f, 0.010f, 0.16f, 0.35f, 2150.0, Color.rgb(255, 94, 66))
     )
 
+    private data class RopeNode(
+        var x: Float,
+        var y: Float,
+        var oldX: Float,
+        var oldY: Float
+    )
+
     private data class MotionState(
         var ropeRest: Float,
         var ropeLength: Float,
@@ -82,7 +90,8 @@ class DangleView(context: Context) : View(context), SensorEventListener {
         var lastPointerY: Float = 0f,
         var lastPointerTime: Long = 0L,
         var pointerVX: Float = 0f,
-        var pointerVY: Float = 0f
+        var pointerVY: Float = 0f,
+        val ropeNodes: ArrayList<RopeNode> = ArrayList()
     )
 
     private val density = resources.displayMetrics.density
@@ -121,11 +130,36 @@ class DangleView(context: Context) : View(context), SensorEventListener {
     private var lastFrameTime = SystemClock.uptimeMillis()
     private var screenW = 0f
     private var screenH = 0f
-    private var anchorY = dp(4f)
+    private var anchorY = dp(60f)
+    private var anchorXOverride = Float.NaN
+    private var dangleVisible = true
     private var paused = false
 
     /** Center of the active charm, used by the service to align the touch area. */
     var onCharmPosition: ((Float, Float) -> Unit)? = null
+
+    fun setAnchorPosition(centerX: Float, cordStartY: Float) {
+        anchorXOverride = centerX
+        anchorY = cordStartY
+        invalidate()
+    }
+
+    fun setDangleVisible(visible: Boolean) {
+        if (dangleVisible == visible) return
+        dangleVisible = visible
+        if (!visible && sensorRegistered) {
+            sensorManager.unregisterListener(this)
+            sensorRegistered = false
+        } else if (visible && isAttachedToWindow && !sensorRegistered) {
+            tiltSensor?.let { sensor ->
+                sensorRegistered = sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+            }
+        }
+        lastFrameTime = SystemClock.uptimeMillis()
+        invalidate()
+    }
+
+    fun isDangleVisible(): Boolean = dangleVisible
 
     init {
         for (i in CHARM_NAMES.indices) {
@@ -181,8 +215,10 @@ class DangleView(context: Context) : View(context), SensorEventListener {
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        tiltSensor?.let { sensor ->
-            sensorRegistered = sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        if (dangleVisible) {
+            tiltSensor?.let { sensor ->
+                sensorRegistered = sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+            }
         }
     }
 
@@ -293,6 +329,7 @@ class DangleView(context: Context) : View(context), SensorEventListener {
         state.pullDistance = 0f
         state.radialVelocity = 0f
         state.angularVelocity *= 0.45f
+        state.angle *= 0.45f
         invalidate()
     }
 
@@ -351,7 +388,7 @@ class DangleView(context: Context) : View(context), SensorEventListener {
         super.onDraw(canvas)
         screenW = width.toFloat()
         screenH = height.toFloat()
-        if (screenW <= 0f || screenH <= 0f) return
+        if (screenW <= 0f || screenH <= 0f || !dangleVisible) return
 
         val now = SystemClock.uptimeMillis()
         val elapsed = if (paused) 0f else ((now - lastFrameTime).coerceIn(1L, 32L)) / 1000f
@@ -369,13 +406,16 @@ class DangleView(context: Context) : View(context), SensorEventListener {
         val charmWidth = min(maxCharmWidth, maxCharmHeight * aspect)
         val charmHeight = charmWidth / aspect
 
-        val anchorX = screenW * 0.5f
-        val safeHalfWidth = max(dp(10f), screenW * 0.5f - charmWidth * 0.5f - dp(12f))
-        val maxAngle = asin((safeHalfWidth / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
-        val visibleAngle = state.angle.coerceIn(-maxAngle, maxAngle)
+        val anchorX = if (anchorXOverride.isNaN()) screenW * 0.5f else anchorXOverride.coerceIn(dp(24f), screenW - dp(24f))
+        val leftClearance = max(dp(10f), anchorX - charmWidth * 0.5f - dp(12f))
+        val rightClearance = max(dp(10f), screenW - anchorX - charmWidth * 0.5f - dp(12f))
+        val leftAngleLimit = asin((leftClearance / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
+        val rightAngleLimit = asin((rightClearance / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
+        val visibleAngle = state.angle.coerceIn(-leftAngleLimit, rightAngleLimit)
         val pivotX = anchorX + sin(visibleAngle) * state.ropeLength
         val pivotY = anchorY + cos(visibleAngle) * state.ropeLength
 
+        updateRopeNodes(state, anchorX, anchorY, pivotX, pivotY, elapsed)
         drawCord(canvas, anchorX, anchorY, pivotX, pivotY, state, profile, now)
         drawCharm(canvas, bitmap, pivotX, pivotY, charmWidth, charmHeight, visibleAngle, profile, now)
         drawPersonalityEffect(canvas, pivotX, pivotY, charmWidth, charmHeight, state, now)
@@ -416,13 +456,16 @@ class DangleView(context: Context) : View(context), SensorEventListener {
             state.angularVelocity += angularAcceleration * dt
             state.angle += state.angularVelocity * dt
 
-            val screenSafeHalf = max(dp(8f), screenW * 0.5f - dp(70f))
-            val limit = asin((screenSafeHalf / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
-            if (state.angle > limit) {
-                state.angle = limit
+            val baseAnchorX = if (anchorXOverride.isNaN()) screenW * 0.5f else anchorXOverride
+            val leftClearance = max(dp(8f), baseAnchorX - dp(70f))
+            val rightClearance = max(dp(8f), screenW - baseAnchorX - dp(70f))
+            val leftLimit = asin((leftClearance / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
+            val rightLimit = asin((rightClearance / max(state.ropeLength, 1f)).coerceIn(0f, 0.96f))
+            if (state.angle > rightLimit) {
+                state.angle = rightLimit
                 if (state.angularVelocity > 0f) state.angularVelocity *= -0.26f
-            } else if (state.angle < -limit) {
-                state.angle = -limit
+            } else if (state.angle < -leftLimit) {
+                state.angle = -leftLimit
                 if (state.angularVelocity < 0f) state.angularVelocity *= -0.26f
             }
 
@@ -435,19 +478,103 @@ class DangleView(context: Context) : View(context), SensorEventListener {
         }
     }
 
+    /**
+     * Verlet rope simulation: eight short segments with damped inertia and
+     * repeated length constraints. This gives the cord its own gentle lag and
+     * curve while the pendant remains attached to the final node.
+     */
+    private fun updateRopeNodes(
+        state: MotionState, ax: Float, ay: Float, ex: Float, ey: Float, elapsed: Float
+    ) {
+        val segmentCount = 8
+        if (state.ropeNodes.size != segmentCount + 1) {
+            state.ropeNodes.clear()
+            for (i in 0..segmentCount) {
+                val t = i / segmentCount.toFloat()
+                val x = ax + (ex - ax) * t
+                val y = ay + (ey - ay) * t
+                state.ropeNodes.add(RopeNode(x, y, x, y))
+            }
+        }
+
+        val nodes = state.ropeNodes
+        val last = nodes.lastIndex
+        nodes[0].x = ax
+        nodes[0].y = ay
+        nodes[last].x = ex
+        nodes[last].y = ey
+
+        val dt = elapsed.coerceIn(0.001f, 0.032f)
+        val dtSquared = dt * dt
+        val gravity = dp(if (state.pulling) 260f else 690f)
+        val breeze = if (state.pulling) 0f else sin(SystemClock.uptimeMillis() / 720.0).toFloat() * dp(12f)
+
+        for (i in 1 until last) {
+            val node = nodes[i]
+            val vx = (node.x - node.oldX) * 0.985f
+            val vy = (node.y - node.oldY) * 0.985f
+            node.oldX = node.x
+            node.oldY = node.y
+            node.x += vx + breeze * dtSquared
+            node.y += vy + gravity * dtSquared
+        }
+
+        val dx = ex - ax
+        val dy = ey - ay
+        val distance = sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
+        // A few percent of slack gives a visible, natural catenary curve.
+        val targetLength = (distance / segmentCount) * (if (state.pulling) 1.002f else 1.035f)
+
+        repeat(7) {
+            nodes[0].x = ax
+            nodes[0].y = ay
+            nodes[last].x = ex
+            nodes[last].y = ey
+            for (i in 0 until last) {
+                val a = nodes[i]
+                val b = nodes[i + 1]
+                val sx = b.x - a.x
+                val sy = b.y - a.y
+                val length = sqrt(sx * sx + sy * sy).coerceAtLeast(0.001f)
+                val correction = (length - targetLength) / length
+                val cx = sx * correction
+                val cy = sy * correction
+                when {
+                    i == 0 -> { b.x -= cx; b.y -= cy }
+                    i + 1 == last -> { a.x += cx; a.y += cy }
+                    else -> {
+                        a.x += cx * 0.5f; a.y += cy * 0.5f
+                        b.x -= cx * 0.5f; b.y -= cy * 0.5f
+                    }
+                }
+            }
+        }
+        nodes[0].x = ax
+        nodes[0].y = ay
+        nodes[last].x = ex
+        nodes[last].y = ey
+    }
+
     private fun drawCord(
         c: Canvas, ax: Float, ay: Float, px: Float, py: Float,
         state: MotionState, profile: CharmPersonality, now: Long
     ) {
         val tension = ((state.ropeLength - state.ropeRest) / dp(620f)).coerceIn(0f, 1f)
-        val speed = abs(state.angularVelocity)
-        val sag = if (state.pulling) 0f else dp(2f + 3.5f * (1f - min(1f, speed * 0.22f)))
-        val sway = if (state.pulling) 0f else sin(now / 390.0).toFloat() * dp(1.4f)
-        val midX = (ax + px) * 0.5f + sway
-        val midY = (ay + py) * 0.5f + sag * (1f - tension)
-        val cord = Path().apply {
-            moveTo(ax, ay)
-            quadTo(midX, midY, px, py)
+        val cord = Path()
+        val nodes = state.ropeNodes
+        if (nodes.size >= 2) {
+            cord.moveTo(nodes.first().x, nodes.first().y)
+            for (i in 1 until nodes.lastIndex) {
+                val current = nodes[i]
+                val next = nodes[i + 1]
+                val midX = (current.x + next.x) * 0.5f
+                val midY = (current.y + next.y) * 0.5f
+                cord.quadTo(current.x, current.y, midX, midY)
+            }
+            cord.lineTo(nodes.last().x, nodes.last().y)
+        } else {
+            cord.moveTo(ax, ay)
+            cord.lineTo(px, py)
         }
 
         // A soft cast shadow, then the smooth satin-gold cylindrical texture.
@@ -574,10 +701,11 @@ class DangleView(context: Context) : View(context), SensorEventListener {
     }
 
     private fun drawBottomDropHint(c: Canvas) {
+        val hintCenterX = if (anchorXOverride.isNaN()) screenW * 0.5f else anchorXOverride
         val panel = RectF(
-            screenW * 0.5f - dp(112f),
+            (hintCenterX - dp(112f)).coerceAtLeast(dp(8f)),
             screenH * 0.70f,
-            screenW * 0.5f + dp(112f),
+            (hintCenterX + dp(112f)).coerceAtMost(screenW - dp(8f)),
             screenH * 0.70f + dp(58f)
         )
         paint.style = Paint.Style.FILL
@@ -587,7 +715,7 @@ class DangleView(context: Context) : View(context), SensorEventListener {
         paint.textAlign = Paint.Align.CENTER
         paint.textSize = dp(14f)
         paint.isFakeBoldText = true
-        c.drawText("Release to close", screenW * 0.5f, screenH * 0.70f + dp(36f), paint)
+        c.drawText("Release to close", hintCenterX, screenH * 0.70f + dp(36f), paint)
         paint.isFakeBoldText = false
         paint.textAlign = Paint.Align.LEFT
     }

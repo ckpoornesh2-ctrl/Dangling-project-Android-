@@ -24,7 +24,17 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-started single decorative hanging lucky charm overlay with touch menu; closed by dragging to the bottom or from the notification." />
+                android:value="User-started floating decorative dangling widget with persistent top handle, touch gestures and media controls." />
+        </service>
+
+        <service
+            android:name=".MediaAccessNotificationListener"
+            android:label="Lucky Dangle music controls"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
         </service>
     </application>
 </manifest>

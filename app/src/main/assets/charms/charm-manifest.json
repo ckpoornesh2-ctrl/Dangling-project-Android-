@@ -57,9 +57,9 @@
   {
     "name": "gold_hook",
     "file": "charms/gold_hook.png",
-    "width": 230,
-    "height": 404,
-    "size_bytes": 96275,
-    "style": "front-facing brushed-gold hook with lower eyelet; cord exits at the bottom of the eyelet"
+    "width": 162,
+    "height": 330,
+    "size_bytes": 78377,
+    "style": "single front-facing gold mount with lower eyelet; no duplicate control icon"
   }
 ]

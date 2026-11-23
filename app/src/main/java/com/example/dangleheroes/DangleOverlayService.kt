@@ -31,9 +31,13 @@ class DangleOverlayService : Service() {
     private var screenHeight = 0
     private var handleWidth = 0
     private var handleHeight = 0
-    private var handleTop = 0
-    private var anchorX = 0f
-    private var anchorY = 0f
+    private var rendererOriginX = 0f
+    private var rendererOriginY = 0f
+    private var hookTopScreenY = 0
+    private var hookTopLocalY = 0f
+    private var anchorX = 0f              // Screen coordinates, used by the touch window.
+    private var anchorYLocal = 0f         // Renderer coordinates, at the hook's lower eyelet.
+    private var anchorYScreen = 0f        // Screen coordinates for the pendant touch window.
     private var charmX = 0f
     private var charmY = 0f
     private var dangleOpen = false
@@ -56,13 +60,16 @@ class DangleOverlayService : Service() {
     private fun installOverlay() {
         screenWidth = resources.displayMetrics.widthPixels
         screenHeight = resources.displayMetrics.heightPixels
-        handleWidth = dp(64)
-        handleHeight = dp(58)
-        handleTop = statusBarHeight()
+
+        // The visible hook is drawn once by DangleView. This larger transparent
+        // hit target sits over it and remains in place even while the pendant is hidden.
+        handleWidth = dp(108)
+        handleHeight = dp(112)
 
         val draw = DangleView(this)
         renderer = draw
         draw.setDangleVisible(false)
+
         val full = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -74,26 +81,65 @@ class DangleOverlayService : Service() {
         ).apply { gravity = Gravity.TOP or Gravity.START }
         wm.addView(draw, full)
 
-        val savedFraction = preferences.getFloat(KEY_ANCHOR_FRACTION, 0.5f).coerceIn(0.08f, 0.92f)
+        // Resolve the renderer's actual screen origin. Some Android builds include
+        // system bars in this window and some offset the content below them.
+        val rendererLocation = IntArray(2)
+        draw.getLocationOnScreen(rendererLocation)
+        rendererOriginX = rendererLocation[0].toFloat()
+        rendererOriginY = rendererLocation[1].toFloat()
+
+        // Re-read the origin after the first layout pass. This avoids a one-time
+        // double status-bar offset on devices that lay out application overlays
+        // below the system bar.
+        draw.post {
+            if (renderer !== draw) return@post
+            val laidOutLocation = IntArray(2)
+            draw.getLocationOnScreen(laidOutLocation)
+            rendererOriginX = laidOutLocation[0].toFloat()
+            rendererOriginY = laidOutLocation[1].toFloat()
+            hookTopLocalY = (hookTopScreenY - rendererOriginY).coerceAtLeast(dp(1).toFloat())
+            anchorYLocal = hookTopLocalY +
+                DangleView.TOP_HOOK_HEIGHT_DP * DangleView.TOP_HOOK_EYELET_CENTER_RATIO *
+                resources.displayMetrics.density
+            anchorYScreen = rendererOriginY + anchorYLocal
+            draw.setAnchorPosition(anchorX - rendererOriginX, anchorYLocal)
+            updateTouchWindowPosition()
+        }
+
+        // Keep the ornament just under the status-bar safe area, at the very top
+        // of the usable screen. Do not add the status-bar inset twice.
+        hookTopScreenY = statusBarHeight() + dp(1)
+        hookTopLocalY = (hookTopScreenY - rendererOriginY).coerceAtLeast(dp(1).toFloat())
+        val density = resources.displayMetrics.density
+        anchorYLocal = hookTopLocalY +
+            DangleView.TOP_HOOK_HEIGHT_DP * DangleView.TOP_HOOK_EYELET_CENTER_RATIO * density
+        anchorYScreen = rendererOriginY + anchorYLocal
+
+        val savedFraction = preferences.getFloat(KEY_ANCHOR_FRACTION, 0.5f)
+            .coerceIn(0.08f, 0.92f)
         anchorX = screenWidth * savedFraction
-        anchorY = handleTop +
-            DangleView.TOP_HOOK_HEIGHT_DP * DangleView.TOP_HOOK_EYELET_CENTER_RATIO *
-            resources.displayMetrics.density
-        draw.setAnchorPosition(anchorX, anchorY)
+        draw.setAnchorPosition(anchorX - rendererOriginX, anchorYLocal)
+
         charmX = anchorX
-        charmY = anchorY + dp(205)
+        charmY = anchorYScreen + dp(205)
         draw.onCharmPosition = { x, y ->
-            charmX = x
-            charmY = y
+            // DangleView reports local coordinates; overlay windows use screen coordinates.
+            charmX = x + rendererOriginX
+            charmY = y + rendererOriginY
             updateTouchWindowPosition()
         }
         draw.onVisibilityAnimationFinished = { visible ->
-            if (!visible && !dangleOpen) removeCharmTouchWindow()
+            if (!visible && !dangleOpen) {
+                removeCharmTouchWindow()
+            } else if (visible && dangleOpen) {
+                updateTouchWindowPosition()
+            }
         }
 
         val handle = DangleHandleView(this)
         handleView = handle
         handle.setCenterX(anchorX)
+        val hitTop = (hookTopScreenY - dp(16)).coerceAtLeast(0)
         val hp = WindowManager.LayoutParams(
             handleWidth,
             handleHeight,
@@ -105,7 +151,7 @@ class DangleOverlayService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = (anchorX - handleWidth * 0.5f).toInt()
                 .coerceIn(0, (screenWidth - handleWidth).coerceAtLeast(0))
-            y = handleTop
+            y = hitTop
         }
         handleParams = hp
         handle.onAnchorMoved = { requestedCenter -> moveAnchor(requestedCenter) }
@@ -113,7 +159,7 @@ class DangleOverlayService : Service() {
         handle.onCloseRequested = { setDangleOpen(false) }
         wm.addView(handle, hp)
 
-        // Start open on first activation. After that, restore the user's last open/closed state.
+        // Restore the last state. The transparent hit target is present in both states.
         val restoreOpen = preferences.getBoolean(KEY_DANGLE_OPEN, true)
         setDangleOpen(restoreOpen, persist = false)
     }
@@ -125,13 +171,15 @@ class DangleOverlayService : Service() {
         handleView?.setCenterX(anchorX)
         handleParams?.let { params ->
             params.x = (anchorX - handleWidth * 0.5f).toInt()
+                .coerceIn(0, (screenWidth - handleWidth).coerceAtLeast(0))
             try {
                 wm.updateViewLayout(handleView, params)
             } catch (e: Exception) {
-                Log.w(TAG, "Could not reposition floating handle", e)
+                Log.w(TAG, "Could not reposition transparent hook hit target", e)
             }
         }
-        renderer?.setAnchorPosition(anchorX, anchorY)
+
+        renderer?.setAnchorPosition(anchorX - rendererOriginX, anchorYLocal)
         preferences.edit()
             .putFloat(KEY_ANCHOR_FRACTION, (anchorX / screenWidth.toFloat()).coerceIn(0.08f, 0.92f))
             .apply()
@@ -145,10 +193,11 @@ class DangleOverlayService : Service() {
         if (persist) preferences.edit().putBoolean(KEY_DANGLE_OPEN, open).apply()
 
         if (open) {
+            // Re-create the pendant touch area after every successful close/re-open cycle.
             addCharmTouchWindow()
         } else {
-            // Keep the touch surface only while the pendant retracts; the renderer
-            // removes it after the upward animation has completed.
+            // Keep the pendant touch area only during the retract animation.
+            // The top hook hit target is never removed.
             dismissCharmMenu()
         }
     }
@@ -161,7 +210,9 @@ class DangleOverlayService : Service() {
         hit.onMenuRequested = { showCharmMenu() }
 
         val hitWidth = minOf(dp(156), (screenWidth - dp(12)).coerceAtLeast(dp(120)))
-        val top = (anchorY + dp(3)).toInt().coerceAtMost(screenHeight - dp(180))
+        // Leave the hook mount and its eyelet exclusively to DangleHandleView.
+        // This prevents the pendant touch window from stealing hook open/close swipes.
+        val top = (anchorYScreen + dp(28)).toInt().coerceAtMost(screenHeight - dp(180))
         val height = calculateTouchHeight(top)
         val params = WindowManager.LayoutParams(
             hitWidth,
@@ -188,7 +239,7 @@ class DangleOverlayService : Service() {
 
     private fun calculateTouchHeight(top: Int): Int {
         val available = (screenHeight - top - dp(8)).coerceAtLeast(dp(180))
-        val charmCenter = if (charmY > top) charmY else anchorY + dp(205)
+        val charmCenter = if (charmY > top) charmY else anchorYScreen + dp(205)
         val needed = (charmCenter - top + dp(125)).toInt()
         return needed.coerceIn(dp(230), minOf(dp(520), available).coerceAtLeast(dp(230)))
     }
@@ -198,7 +249,7 @@ class DangleOverlayService : Service() {
         val params = touchParams ?: return
         if (view.isGestureActive || menuView != null || !dangleOpen) return
         val width = params.width
-        val top = (anchorY + dp(3)).toInt().coerceAtMost(screenHeight - dp(180))
+        val top = (anchorYScreen + dp(28)).toInt().coerceAtMost(screenHeight - dp(180))
         val nx = (charmX - width * 0.5f).toInt()
             .coerceIn(0, (screenWidth - width).coerceAtLeast(0))
         val newHeight = calculateTouchHeight(top)

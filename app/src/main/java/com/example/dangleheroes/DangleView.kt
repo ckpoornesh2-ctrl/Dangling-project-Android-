@@ -34,9 +34,9 @@ import kotlin.math.sin
  */
 class DangleView(context: Context) : View(context), SensorEventListener {
     companion object {
-        const val TOP_HOOK_HEIGHT_DP = 58f
+        const val TOP_HOOK_HEIGHT_DP = 74f
         // Centre of the small lower eyelet within gold_hook.png (from top, as a fraction of image height).
-        const val TOP_HOOK_EYELET_CENTER_RATIO = 0.94f
+        const val TOP_HOOK_EYELET_CENTER_RATIO = 1.0f
         private val CHARM_NAMES = listOf(
             "Evil Eye", "Chili & Lemon", "Daruma", "Lucky Cat", "Oni Mask"
         )
@@ -145,7 +145,7 @@ class DangleView(context: Context) : View(context), SensorEventListener {
     private var visibilityTarget = 0f
     private var visibilityStartedAt = 0L
     private var visibilityAnimating = false
-    private val visibilityDurationMs = 560L
+    private val visibilityDurationMs = 600L
     private var paused = false
 
     /** Center of the active charm, used by the service to align the touch area. */
@@ -195,7 +195,8 @@ class DangleView(context: Context) : View(context), SensorEventListener {
             val inverse = 1f - t
             1f - inverse * inverse * inverse + 0.018f * kotlin.math.sin(Math.PI * t).toFloat() * (1f - t)
         } else {
-            t * t * t
+            // Smooth, controlled upward retract rather than a sudden final snap.
+            t * t * (3f - 2f * t)
         }
         visibilityProgress = visibilityFrom + (visibilityTarget - visibilityFrom) * eased
 

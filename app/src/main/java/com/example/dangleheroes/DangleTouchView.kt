@@ -72,15 +72,21 @@ class DangleTouchView(
                 handler.removeCallbacks(longPressRunnable)
                 val wasLongPress = longPressTriggered
                 val dy = event.rawY - downY
-                val closeRequested = moved && !wasLongPress && dy > dp(65f) &&
+                val dx = event.rawX - downX
+                val closeByBottomDrop = moved && !wasLongPress && dy > dp(65f) &&
                     renderer.isInBottomDropZone(event.rawY)
+                // An intentional upward swipe on the pendant retracts it too.
+                // The hook itself has its own larger transparent gesture target.
+                val closeByUpSwipe = moved && !wasLongPress && dy <= -dp(72f) &&
+                    abs(dy) > abs(dx) * 1.18f
+                val closeRequested = closeByBottomDrop || closeByUpSwipe
 
                 if (closeRequested) {
                     if (!dropZoneActive) performCloseZoneHaptic()
                     renderer.cancelPull()
                     onDismissRequested?.invoke()
                 } else if (!wasLongPress) {
-                    // All ordinary drags remain physical sling gestures in this developer build.
+                    // Downward/sideways pulls retain the spring-and-sling interaction.
                     renderer.releasePull()
                 }
 

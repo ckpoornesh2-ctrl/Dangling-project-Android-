@@ -9,12 +9,9 @@ import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
-import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
-import android.view.HapticFeedbackConstants
 import android.view.WindowManager
-import android.widget.Toast
 import kotlin.math.abs
 
 /**
@@ -49,7 +46,7 @@ class DangleOverlayService : Service() {
         startForeground(NOTIFICATION_ID, notification())
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         try {
-            installOverlay() 
+            installOverlay()
         } catch (e: Exception) {
             Log.e(TAG, "Could not create the floating handle", e)
             stopSelf()
@@ -101,7 +98,8 @@ class DangleOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (anchorX - handleWidth * 0.5f).toInt().coerceIn(0, (screenWidth - handleWidth).coerceAtLeast(0))
+            x = (anchorX - handleWidth * 0.5f).toInt()
+                .coerceIn(0, (screenWidth - handleWidth).coerceAtLeast(0))
             y = handleTop
         }
         handleParams = hp
@@ -122,12 +120,16 @@ class DangleOverlayService : Service() {
         handleView?.setCenterX(anchorX)
         handleParams?.let { params ->
             params.x = (anchorX - handleWidth * 0.5f).toInt()
-            try { wm.updateViewLayout(handleView, params) } catch (e: Exception) {
+            try {
+                wm.updateViewLayout(handleView, params)
+            } catch (e: Exception) {
                 Log.w(TAG, "Could not reposition floating handle", e)
             }
         }
         renderer?.setAnchorPosition(anchorX, anchorY)
-        preferences.edit().putFloat(KEY_ANCHOR_FRACTION, (anchorX / screenWidth.toFloat()).coerceIn(0.08f, 0.92f)).apply()
+        preferences.edit()
+            .putFloat(KEY_ANCHOR_FRACTION, (anchorX / screenWidth.toFloat()).coerceIn(0.08f, 0.92f))
+            .apply()
         updateTouchWindowPosition()
     }
 
@@ -151,7 +153,6 @@ class DangleOverlayService : Service() {
         touchView = hit
         hit.onDismissRequested = { setDangleOpen(false) }
         hit.onMenuRequested = { showCharmMenu() }
-        hit.onMusicActionRequested = { action -> performMusicAction(action) }
 
         val hitWidth = minOf(dp(156), (screenWidth - dp(12)).coerceAtLeast(dp(120)))
         val top = (anchorY + dp(3)).toInt().coerceAtMost(screenHeight - dp(180))
@@ -165,7 +166,8 @@ class DangleOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (charmX - hitWidth * 0.5f).toInt().coerceIn(0, (screenWidth - hitWidth).coerceAtLeast(0))
+            x = (charmX - hitWidth * 0.5f).toInt()
+                .coerceIn(0, (screenWidth - hitWidth).coerceAtLeast(0))
             y = top
         }
         touchParams = params
@@ -191,13 +193,16 @@ class DangleOverlayService : Service() {
         if (view.isGestureActive || menuView != null || !dangleOpen) return
         val width = params.width
         val top = (anchorY + dp(3)).toInt().coerceAtMost(screenHeight - dp(180))
-        val nx = (charmX - width * 0.5f).toInt().coerceIn(0, (screenWidth - width).coerceAtLeast(0))
+        val nx = (charmX - width * 0.5f).toInt()
+            .coerceIn(0, (screenWidth - width).coerceAtLeast(0))
         val newHeight = calculateTouchHeight(top)
         if (abs(nx - params.x) > dp(2) || abs(top - params.y) > dp(2) || newHeight != params.height) {
             params.x = nx
             params.y = top
             params.height = newHeight
-            try { wm.updateViewLayout(view, params) } catch (e: Exception) {
+            try {
+                wm.updateViewLayout(view, params)
+            } catch (e: Exception) {
                 Log.w(TAG, "Could not update charm touch area", e)
             }
         }
@@ -205,37 +210,14 @@ class DangleOverlayService : Service() {
 
     private fun removeCharmTouchWindow() {
         touchView?.let { view ->
-            try { wm.removeView(view) } catch (e: Exception) {
+            try {
+                wm.removeView(view)
+            } catch (e: Exception) {
                 Log.w(TAG, "Charm touch window removal skipped", e)
             }
         }
         touchView = null
         touchParams = null
-    }
-
-    private fun performMusicAction(action: Int) {
-        when (MediaSessionControls.perform(this, action)) {
-            MediaSessionControls.RESULT_SENT -> {
-                touchView?.performMusicConfirmationHaptic()
-                val message = when (action) {
-                    MediaSessionControls.ACTION_TOGGLE_PLAY_PAUSE -> "Play / Pause"
-                    MediaSessionControls.ACTION_PREVIOUS -> "Previous track"
-                    else -> "Next track"
-                }
-                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-            }
-            MediaSessionControls.RESULT_ACCESS_REQUIRED -> {
-                Toast.makeText(this, "Enable Notification Access to control music", Toast.LENGTH_LONG).show()
-                try {
-                    startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } catch (e: Exception) {
-                    Log.w(TAG, "Notification access settings unavailable", e)
-                }
-            }
-            MediaSessionControls.RESULT_NO_SESSION ->
-                Toast.makeText(this, "No active music session found", Toast.LENGTH_SHORT).show()
-            else -> Toast.makeText(this, "Music control is unavailable right now", Toast.LENGTH_SHORT).show()
-        }
     }
 
     private fun showCharmMenu() {
@@ -266,7 +248,6 @@ class DangleOverlayService : Service() {
             draw.togglePhoneMotion()
             menu.updateState(draw.isPaused(), draw.currentSizeLabel(), draw.isPhoneMotionEnabled(), draw.currentCharmName())
         }
-        // Closing from this menu collapses the pendant but leaves the top handle available.
         menu.onCloseRequested = { setDangleOpen(false) }
         menu.onDismissRequested = { dismissCharmMenu() }
 
@@ -298,7 +279,9 @@ class DangleOverlayService : Service() {
 
     private fun dismissCharmMenu() {
         menuView?.let { menu ->
-            try { wm.removeView(menu) } catch (e: Exception) {
+            try {
+                wm.removeView(menu)
+            } catch (e: Exception) {
                 Log.w(TAG, "Charm menu removal skipped", e)
             }
         }
@@ -347,7 +330,6 @@ class DangleOverlayService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        // Keep the small handle available if Android reclaims the process.
         return START_STICKY
     }
 

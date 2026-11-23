@@ -31,7 +31,6 @@ class DangleTouchView(
 
     var onDismissRequested: (() -> Unit)? = null
     var onMenuRequested: (() -> Unit)? = null
-    var onMusicActionRequested: ((Int) -> Unit)? = null
 
     private val longPressRunnable = Runnable {
         if (isDown && !moved && !longPressTriggered) {
@@ -72,29 +71,23 @@ class DangleTouchView(
             MotionEvent.ACTION_UP -> {
                 handler.removeCallbacks(longPressRunnable)
                 val wasLongPress = longPressTriggered
-                val dx = event.rawX - downX
                 val dy = event.rawY - downY
-                val closeRequested = moved && !wasLongPress && dy > dp(65f) && renderer.isInBottomDropZone(event.rawY)
-                val musicAction = if (moved && !wasLongPress && !closeRequested) classifyMusicGesture(dx, dy) else null
+                val closeRequested = moved && !wasLongPress && dy > dp(65f) &&
+                    renderer.isInBottomDropZone(event.rawY)
 
-                when {
-                    closeRequested -> {
-                        if (!dropZoneActive) performCloseZoneHaptic()
-                        renderer.cancelPull()
-                        onDismissRequested?.invoke()
-                    }
-                    musicAction != null -> {
-                        // Short tugs/swipes control the active Android media session; they do not sling the charm.
-                        renderer.cancelPull()
-                        onMusicActionRequested?.invoke(musicAction)
-                    }
-                    !wasLongPress -> renderer.releasePull()
+                if (closeRequested) {
+                    if (!dropZoneActive) performCloseZoneHaptic()
+                    renderer.cancelPull()
+                    onDismissRequested?.invoke()
+                } else if (!wasLongPress) {
+                    // All ordinary drags remain physical sling gestures in this developer build.
+                    renderer.releasePull()
                 }
 
                 isDown = false
                 isGestureActive = false
                 dropZoneActive = false
-                if (!closeRequested && musicAction == null && !moved && !wasLongPress) {
+                if (!closeRequested && !moved && !wasLongPress) {
                     renderer.nextCharm()
                 }
                 performClick()
@@ -112,27 +105,12 @@ class DangleTouchView(
         return true
     }
 
-    /**
-     * Version 0.6 gestures: short downward tug = play/pause, swipe left = next,
-     * swipe right = previous. Longer pulls remain the physical sling gesture.
-     */
-    private fun classifyMusicGesture(dx: Float, dy: Float): Int? {
-        if (abs(dx) >= dp(72f) && abs(dy) <= dp(92f) && abs(dx) > abs(dy) * 1.15f) {
-            return if (dx < 0f) MediaSessionControls.ACTION_NEXT else MediaSessionControls.ACTION_PREVIOUS
-        }
-        if (dy in dp(38f)..dp(126f) && abs(dx) <= dp(58f)) {
-            return MediaSessionControls.ACTION_TOGGLE_PLAY_PAUSE
-        }
-        return null
-    }
-
-    fun performMusicConfirmationHaptic() {
-        val feedback = if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.CONTEXT_CLICK
-        performHapticFeedback(feedback)
-    }
-
     private fun performCloseZoneHaptic() {
-        val feedback = if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.CONTEXT_CLICK
+        val feedback = if (Build.VERSION.SDK_INT >= 30) {
+            HapticFeedbackConstants.CONFIRM
+        } else {
+            HapticFeedbackConstants.CONTEXT_CLICK
+        }
         performHapticFeedback(feedback)
     }
 

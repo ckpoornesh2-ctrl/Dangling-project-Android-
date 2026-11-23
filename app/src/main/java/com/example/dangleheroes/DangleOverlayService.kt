@@ -79,7 +79,7 @@ class DangleOverlayService : Service() {
 
         val savedFraction = preferences.getFloat(KEY_ANCHOR_FRACTION, 0.5f).coerceIn(0.08f, 0.92f)
         anchorX = screenWidth * savedFraction
-        anchorY = handleTop + handleHeight - dp(7)
+        anchorY = (handleTop + handleHeight - dp(7)).toFloat()
         draw.setAnchorPosition(anchorX, anchorY)
         charmX = anchorX
         charmY = anchorY + dp(205)
